@@ -49,11 +49,18 @@
   idle total, renderiza solo en configure), memoria contenida ✅
   (~137 MB con driver Vulkan).
 
-### Fase 3 — Contrato de runtime + hot-reload (3-6 semanas)
+### Fase 3 — Contrato de runtime + hot-reload ✅ (2026-09-16)
 - Trait `WallpaperRuntime`: tiempo, delta, resolución, mouse,
-  parámetros del manifiesto, audio opcional (off por defecto).
-- Uniform buffers, hot-reload de WGSL, límite de FPS configurable.
-- Demo: shader animado que se edita en vivo sin reiniciar.
+  parámetros planos (`[f32; 4]` → `u_params0..3`; los nombres llegarán
+  con el manifiesto de la Fase 4). Audio opcional: pendiente (off por
+  defecto, se evaluará con el primer wallpaper que lo necesite).
+- ✅ Uniform buffers (48 bytes), hot-reload de WGSL (mtime + validación
+  con naga; shader roto = se conserva el pipeline anterior), límite de
+  FPS configurable (`--fps`, por defecto 30).
+- ✅ Demo verificada en niri: animación por píxeles entre capturas,
+  hot-reload en vivo (vino → verde → shader roto rechazado →
+  recuperado), CPU 4% a 30 fps en 2560x1440, sobrevive a recarga de
+  config de niri.
 
 ### Fase 4 — Formato .wallpaper (2-4 semanas)
 - ZIP con `wallpaper.json`, `preview.png`, shaders, assets.

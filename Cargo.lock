@@ -72,6 +72,7 @@ dependencies = [
  "bruma-core",
  "bruma-platform",
  "bruma-renderer-wgpu",
+ "bruma-runtime",
  "log",
 ]
 
@@ -90,6 +91,7 @@ dependencies = [
  "bruma-core",
  "bruma-renderer",
  "log",
+ "rustix",
  "smithay-client-toolkit",
  "thiserror",
 ]
@@ -99,6 +101,7 @@ name = "bruma-renderer"
 version = "0.1.0"
 dependencies = [
  "bruma-core",
+ "bruma-runtime",
 ]
 
 [[package]]
@@ -109,6 +112,7 @@ dependencies = [
  "bruma-renderer",
  "image",
  "log",
+ "naga",
  "pollster",
  "raw-window-handle",
  "thiserror",

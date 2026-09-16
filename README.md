@@ -10,16 +10,19 @@ comparta sus fondos.
 
 ## Estado del proyecto
 
-Fase 2 completada: `bruma run --image foto.png` muestra una imagen a
-pantalla completa renderizada por wgpu/Vulkan (CPU idle, ~137 MB RAM).
-También: color sólido (Fase 1) y triángulo de prueba. En construcción —
-ver [PLAN.md](PLAN.md).
+Fase 3 completada: `bruma run --shader hola.wgsl` ejecuta un shader
+animado (wgpu/Vulkan, límite de FPS, CPU ~4% a 30 fps en 2560x1440) y el
+archivo se recarga **en caliente** al editarlo, sin reiniciar. También:
+imagen a pantalla completa (Fase 2), color sólido (Fase 1) y triángulo de
+prueba. En construcción — ver [PLAN.md](PLAN.md).
 
 ```bash
-bruma run                  # fondo de color sólido
-bruma run 0x3B4252         # color hex a elección
-bruma run --gpu            # triángulo WGSL (prueba de pipeline)
-bruma run --image foto.png # imagen a pantalla completa
+bruma run                        # fondo de color sólido
+bruma run 0x3B4252               # color hex a elección
+bruma run --gpu                  # triángulo WGSL (prueba de pipeline)
+bruma run --image foto.png       # imagen a pantalla completa
+bruma run --shader hola.wgsl     # shader animado con hot-reload
+bruma run --shader hola.wgsl --fps 60 --param=0.5  # ritmo y parámetros
 ```
 
 ## Arquitectura
@@ -44,7 +47,7 @@ wgpu, Wayland ni Steam (ver [DECISIONS.md](DECISIONS.md)).
 | 0 | workspace, CI, licencias, docs | ✅ esta estructura |
 | 1 | ventana de fondo Wayland (niri primero) | ✅ color sólido detrás de todo |
 | 2 | wgpu + WGSL | ✅ imagen a pantalla completa |
-| 3 | contrato de runtime + hot-reload | shader animado editado en vivo |
+| 3 | contrato de runtime + hot-reload | ✅ shader animado editado en vivo |
 | 4 | formato `.wallpaper` | `bruma validate` / `install` |
 | 5 | multi-monitor, pausas | wallpaper por pantalla |
 | 6 | plantillas para creadores | un extraño crea y comparte |

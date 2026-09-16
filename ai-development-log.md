@@ -122,3 +122,49 @@
   urgente por ser su uso diario).
 - **Siguiente paso:** Fase 3 — contrato `WallpaperRuntime`, uniforms,
   hot-reload WGSL, límite de FPS; primer shader animado.
+
+## 2026-09-16 — Fase 3: runtime, shader animado y hot-reload — hito
+
+- **Sesión:** continuación en Freebuff, con dos cortes de conexión a
+  mitad de camino; el estado quedó coherente en ambos casos gracias al
+  orden todo-verificado-antes-de-escribir.
+- **Hecho:**
+  - `bruma-runtime` (puro, D6): contrato `WallpaperRuntime`
+    (`begin_frame` → `FrameDecision` Draw/Skip{deadline}, `target_fps`,
+    `state()`, params) + `BasicRuntime` (reloj, límite de FPS, pausa que
+    congela el tiempo, mouse/resolución, params). 6 tests.
+  - `bruma-renderer`: `FrameRenderer` ampliado con `wants_animation()`
+    y `render_animated(&FrameState)` (default impls: los renderers de
+    las fases anteriores no cambian). Re-exports del runtime.
+  - `bruma-renderer-wgpu`: `AnimatedRenderer` — uniform block de 48
+    bytes (`u_time/u_params0/u_mouse/u_params/u_res`; el padding lo
+    fija un `const assert!`), hot-reload por mtime con validación
+    SÍNCRONA del WGSL usando `naga` directo (la misma naga de wgpu: el
+    mensaje de error es tipado, no depende de features de wgpu). Shader
+    roto → se conserva el pipeline anterior y el error queda en el log.
+  - `bruma-platform`: `run_with_runtime()` — réplica del bucle interno
+    de `blocking_dispatch` de wayland-client pero con `rustix::poll` y
+    timeout: duerme hasta el deadline del runtime o hasta que el
+    compositor mande algo. La resolución del `FrameState` la impone la
+    superficie (uniforms siempre coherentes con el target).
+  - CLI: `bruma run --shader F.wgsl [--fps N] [--param=VALOR]`.
+  - naga 30.0.1 añadido (wgsl-in) — ya estaba en el árbol por wgpu:
+    coste real de dependencias: cero.
+- **Demo verificada en niri:** animación confirmada por píxeles (el
+  fondo visible cambia entre capturas; antes, en Fase 2, era estático),
+  hot-reload en vivo completo: vino → verde → shader roto (rechazado,
+  wallpaper sigue vivo) → arreglado (recuperado). `--param=0.9` brilla
+  más (verificado por píxel). CPU: **20 ticks en 5 s ≈ 4% de un núcleo**
+  a 30 fps en 2560x1440 (vs 0% estático: el coste es el render de 75 MB
+  de píxeles/s por GPU, la CPU solo duerme y sube uniforms). RAM
+  ~141 MB. Sobrevive a `load-config-file` de niri con animación activa.
+- **Notas de API verificadas contra fuente:** wgpu 30 `push_error_scope`
+  devuelve guard; naga 30: `Validator::new(ValidationFlags, Capabilities)`,
+  `Capabilities` en `naga::valid`; structs uniform en WGSL redondean su
+  tamaño a múltiplo de 16 (40 → 48); `wayland-backend::Backend::poll_fd()`.
+- **Pendiente:** mouse real (el cursor del compositor no llega a un
+  layer-shell sin passthrough; se evaluará `--mouse` con la Fase 5 o
+  quedará para wallpapers que lo pidan), pausa por visibilidad
+  (salidas apagadas), audio (se activará con el primer caso real).
+- **Siguiente paso:** Fase 4 — formato `.wallpaper` (manifiesto +
+  zip): `bruma validate` / `install`, y ahí los params ganan nombres.

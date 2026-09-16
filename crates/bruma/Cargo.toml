@@ -12,4 +12,5 @@ publish = false
 bruma-core.workspace = true
 bruma-platform.workspace = true
 bruma-renderer-wgpu.workspace = true
+bruma-runtime = { version = "0.1.0", path = "../bruma-runtime" }
 log = "0.4.34"

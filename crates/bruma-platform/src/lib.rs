@@ -2,10 +2,15 @@
 //!
 //! Capa de plataforma: ventana de fondo en Wayland vía `wlr-layer-shell`.
 //!
-//! Estado: **Fase 1**. Implementación con `smithay-client-toolkit` 0.21
+//! Estado: **Fase 3**. Implementación con `smithay-client-toolkit` 0.21
 //! (NO winit: no soporta layer-shell), igual que swww. El banco de pruebas
 //! de referencia es **niri** (+ DankMaterialShell), con el resto de
 //! compositors wlroots/KWin como best-effort.
+//!
+//! El bucle de eventos tiene dos modos: `run` (solo eventos Wayland; la
+//! CPU queda idle con contenido estático) y `run_with_runtime` (conduce
+//! además la animación al ritmo que pida el `WallpaperRuntime`, durmiendo
+//! en `poll` sobre el socket — nunca spin).
 //!
 //! Demo de la fase: un rectángulo de color sólido detrás de todas las
 //! ventanas, anclado a los cuatro bordes, que sobrevive a recargas de
@@ -18,7 +23,7 @@
 #![forbid(unsafe_code)]
 
 use bruma_core::Color;
-use bruma_renderer::FrameRenderer;
+use bruma_renderer::{FrameDecision, FrameRenderer, WallpaperRuntime};
 use smithay_client_toolkit::reexports::client as wayland_client;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -36,6 +41,7 @@ use smithay_client_toolkit::{
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
 use std::ptr::NonNull;
+use std::time::Instant;
 use wayland_client::{
     Connection, EventQueue, Proxy, QueueHandle,
     globals::registry_queue_init,
@@ -48,6 +54,8 @@ use wayland_client::{
 /// eventos mantiene la ventana viva, redibujando en cada re-configuración
 /// del compositor (recarga de config, cambio de resolución, etc.).
 pub struct BackgroundWindow {
+    /// Manija de la conexión (Arc interno): necesaria para `display_ptr`,
+    /// el fd del socket y roundtrips del CLI.
     conn: Connection,
     event_queue: EventQueue<BackgroundState>,
     state: BackgroundState,
@@ -104,6 +112,9 @@ pub enum PlatformError {
     /// Error de despacho de eventos.
     #[error("error en el bucle de eventos: {0}")]
     Dispatch(#[from] wayland_client::DispatchError),
+    /// Error de E/S esperando eventos (flush/poll/lectura del socket).
+    #[error("error esperando eventos: {0}")]
+    Poll(String),
 }
 
 impl BackgroundWindow {
@@ -178,6 +189,15 @@ impl BackgroundWindow {
         self.state.renderer = Some(renderer);
     }
 
+    /// ¿El renderer instalado produce contenido animado? Lo consulta el
+    /// CLI para elegir entre `run` y `run_with_runtime`.
+    pub fn wants_animation(&self) -> bool {
+        self.state
+            .renderer
+            .as_ref()
+            .is_some_and(|r| r.wants_animation())
+    }
+
     /// Puntero crudo al `wl_display` de la conexión.
     ///
     /// Para crear la superficie de wgpu (`WgpuRenderer::new_wayland`). El
@@ -193,11 +213,6 @@ impl BackgroundWindow {
     pub fn surface_ptr(&self) -> NonNull<std::ffi::c_void> {
         let ptr = self.state.layer.wl_surface().id().as_ptr();
         NonNull::new(ptr).expect("wl_surface vivo").cast()
-    }
-
-    /// Conexión Wayland subyacente (para roundtrips del CLI o tests).
-    pub fn connection(&self) -> &Connection {
-        &self.conn
     }
 
     /// Cambia el color de fondo; surte efecto en el próximo redibujo.
@@ -233,10 +248,105 @@ impl BackgroundWindow {
 
     /// Ejecuta el bucle de eventos hasta que el compositor cierre la
     /// ventana. Ctrl-C termina el proceso (comportamiento por defecto).
-    pub fn run(mut self) -> Result<(), PlatformError> {
+    ///
+    /// Modo estático: solo atiende eventos Wayland (configure, frame
+    /// callbacks...); entre eventos, `blocking_dispatch` duerme sin girar
+    /// la CPU.
+    pub fn run(&mut self) -> Result<(), PlatformError> {
         while !self.state.closed {
             self.event_queue.blocking_dispatch(&mut self.state)?;
         }
+        Ok(())
+    }
+
+    /// Igual que [`Self::run`], pero conduciendo además la animación con
+    /// el runtime dado (Fase 3).
+    ///
+    /// El ritmo lo dicta el runtime: en cada iteración se le pregunta si
+    /// toca dibujar ([`WallpaperRuntime::begin_frame`]); si no, el bucle
+    /// duerme en `poll` hasta el deadline del runtime o hasta que llegue
+    /// un evento del compositor — lo que ocurra primero. Sin spin.
+    pub fn run_with_runtime(
+        &mut self,
+        runtime: &mut dyn WallpaperRuntime,
+    ) -> Result<(), PlatformError> {
+        while !self.state.closed {
+            match runtime.begin_frame(Instant::now()) {
+                FrameDecision::Draw => {
+                    // La resolución real la impone la superficie (último
+                    // configure); el runtime aporta tiempo, mouse y
+                    // parámetros. Así los uniforms siempre cuadran con el
+                    // tamaño del target, incluso tras un re-configure.
+                    let mut st = runtime.state();
+                    st.width = self.state.width;
+                    st.height = self.state.height;
+                    match self.state.renderer.as_mut() {
+                        Some(renderer) => renderer.render_animated(&st),
+                        None => self.state.draw_solid(),
+                    }
+                    // El redibujo puede haber vencido al deadline: no
+                    // duplicar wakeup en esta iteración.
+                    self.wait_and_dispatch(None)?;
+                }
+                FrameDecision::Skip { deadline } => {
+                    self.wait_and_dispatch(Some(deadline))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Despacha lo pendiente y, si no había nada, espera en el socket de
+    /// Wayland hasta `timeout` o hasta que lleguen eventos (lo que ocurra
+    /// antes). Es la réplica del bucle interno de
+    /// `EventQueue::blocking_dispatch`, con timeout añadido:
+    ///
+    /// 1. `dispatch_pending`: despacha lo ya leído.
+    /// 2. `flush`: envía las peticiones pendientes (p. ej. frame callbacks).
+    /// 3. `prepare_read` + `poll` + `read`: arma la lectura y duerme.
+    ///    El `prepare_read` es obligatorio para no perder eventos que
+    ///    lleguen entre el `dispatch_pending` y el `poll`.
+    /// 4. `dispatch_pending` final: reparte lo recién leído.
+    fn wait_and_dispatch(&mut self, timeout: Option<Instant>) -> Result<(), PlatformError> {
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
+
+        if self.event_queue.dispatch_pending(&mut self.state)? > 0 {
+            return Ok(());
+        }
+        self.event_queue
+            .flush()
+            .map_err(|e| PlatformError::Poll(e.to_string()))?;
+
+        let wait = timeout.map(|deadline| {
+            let d = deadline.saturating_duration_since(Instant::now());
+            Timespec {
+                tv_sec: d.as_secs() as _,
+                tv_nsec: d.subsec_nanos() as _,
+            }
+        });
+
+        if let Some(guard) = self.event_queue.prepare_read() {
+            // El handle Backend es un Arc barato; el BorrowedFd presta de
+            // él, así que el handle vive en este bloque.
+            let backend = self.conn.backend();
+            let fd = backend.poll_fd();
+            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+            match poll(&mut fds, wait.as_ref()) {
+                // ready == 0: venció el timeout (toque de animación).
+                // ready > 0: llegaron datos; se leen y despachan abajo.
+                Ok(_) => {}
+                // EINTR (señales como SIGINT): no es un error para el bucle.
+                Err(rustix::io::Errno::INTR) => {}
+                Err(e) => return Err(PlatformError::Poll(e.to_string())),
+            }
+            // `read` consume el guard; si devolvió 0 eventos (p. ej. solo
+            // EINTR), el dispatch_pending de abajo no tendrá nada nuevo.
+            guard
+                .read()
+                .map_err(|e| PlatformError::Poll(e.to_string()))?;
+        }
+
+        self.event_queue.dispatch_pending(&mut self.state)?;
         Ok(())
     }
 }

@@ -12,5 +12,8 @@ publish = false
 bruma-core.workspace = true
 bruma-renderer.workspace = true
 log = "0.4.34"
+# poll con timeout sobre el socket de Wayland (bucle animado, Fase 3).
+# Mismas features que pide wayland-backend: cero dependencias extra.
+rustix = { version = "1.1", default-features = false, features = ["event", "std"] }
 smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["system"] }
 thiserror = "2.0.20"
