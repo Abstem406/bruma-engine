@@ -5,6 +5,7 @@ members = [
     "crates/bruma-package",
     "crates/bruma-runtime",
     "crates/bruma-renderer",
+    "crates/bruma-renderer-wgpu",
     "crates/bruma-platform",
     "crates/bruma",
 ]
@@ -18,4 +19,10 @@ authors = ["bruma-engine contributors"]
 
 [workspace.dependencies]
 bruma-core = { path = "crates/bruma-core", version = "0.1.0" }
+bruma-package = { path = "crates/bruma-package", version = "0.1.0" }
+bruma-runtime = { path = "crates/bruma-runtime", version = "0.1.0" }
+bruma-renderer = { path = "crates/bruma-renderer", version = "0.1.0" }
+bruma-renderer-wgpu = { path = "crates/bruma-renderer-wgpu", version = "0.1.0" }
 bruma-platform = { path = "crates/bruma-platform", version = "0.1.0" }
+log = "0.4"
+thiserror = "2"

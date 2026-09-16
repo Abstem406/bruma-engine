@@ -1,0 +1,18 @@
+[package]
+name = "bruma-renderer-wgpu"
+description = "Implementación del contrato de renderizado de bruma con wgpu + WGSL (Fase 2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+publish = false
+
+[dependencies]
+bruma-core.workspace = true
+bruma-renderer.workspace = true
+wgpu = { version = "30.0.1", default-features = false, features = ["wgsl", "vulkan", "gles"] }
+raw-window-handle = "0.6"
+pollster = "0.4"
+thiserror.workspace = true
+log.workspace = true

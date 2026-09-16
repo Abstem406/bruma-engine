@@ -11,4 +11,5 @@ publish = false
 [dependencies]
 bruma-core.workspace = true
 bruma-platform.workspace = true
+bruma-renderer-wgpu.workspace = true
 log = "0.4.34"

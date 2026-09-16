@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 use bruma_core::Color;
+use bruma_renderer::FrameRenderer;
 use smithay_client_toolkit::reexports::client as wayland_client;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -34,8 +35,9 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
+use std::ptr::NonNull;
 use wayland_client::{
-    Connection, EventQueue, QueueHandle,
+    Connection, EventQueue, Proxy, QueueHandle,
     globals::registry_queue_init,
     protocol::{wl_output, wl_shm, wl_surface},
 };
@@ -64,6 +66,9 @@ struct BackgroundState {
     height: u32,
     configure_seen: bool,
     closed: bool,
+    /// Renderizador de frames (Fase 2). Si hay uno, pinta él; si no,
+    /// se usa el fallback de color sólido de la Fase 1.
+    renderer: Option<Box<dyn FrameRenderer>>,
     /// Salidas conocidas; una entrada por pantalla conectada (Fase 5).
     outputs: Vec<OutputInfo>,
 }
@@ -160,9 +165,34 @@ impl BackgroundWindow {
                 height: 0,
                 configure_seen: false,
                 closed: false,
+                renderer: None,
                 outputs: Vec::new(),
             },
         })
+    }
+
+    /// Instala el renderizador de frames (contrato de
+    /// `bruma-renderer`). A partir de entonces pinta él en cada
+    /// re-configuración, en vez del color sólido de la Fase 1.
+    pub fn set_frame_renderer(&mut self, renderer: Box<dyn FrameRenderer>) {
+        self.state.renderer = Some(renderer);
+    }
+
+    /// Puntero crudo al `wl_display` de la conexión.
+    ///
+    /// Para crear la superficie de wgpu (`WgpuRenderer::new_wayland`). El
+    /// puntero es válido mientras `BackgroundWindow` viva.
+    pub fn display_ptr(&self) -> NonNull<std::ffi::c_void> {
+        // En libwayland `wl_display` ES un `wl_proxy` (el mismo puntero);
+        // el cast a c_void es lo que esperan wgpu/Vulkan.
+        let ptr = self.conn.backend().display_id().as_ptr();
+        NonNull::new(ptr).expect("wl_display vivo").cast()
+    }
+
+    /// Puntero crudo al `wl_surface` de la ventana de fondo.
+    pub fn surface_ptr(&self) -> NonNull<std::ffi::c_void> {
+        let ptr = self.state.layer.wl_surface().id().as_ptr();
+        NonNull::new(ptr).expect("wl_surface vivo").cast()
     }
 
     /// Conexión Wayland subyacente (para roundtrips del CLI o tests).
@@ -212,8 +242,9 @@ impl BackgroundWindow {
 }
 
 impl BackgroundState {
-    /// Rellena un buffer ARGB8888 del color actual, lo daña y lo committea.
-    fn draw(&mut self) {
+    /// Fallback de la Fase 1: rellena un buffer ARGB8888 del color
+    /// actual, lo daña y lo committea. Se usa cuando no hay renderer.
+    fn draw_solid(&mut self) {
         let (width, height) = (self.width, self.height);
         if width == 0 || height == 0 {
             return;
@@ -354,7 +385,10 @@ impl LayerShellHandler for BackgroundState {
         self.configure_seen = true;
         // Redibujar en CADA configure: así sobrevivimos a recargas de
         // configuración de niri y a cambios de resolución de salida.
-        self.draw();
+        match &mut self.renderer {
+            Some(renderer) => renderer.render_frame(self.width, self.height),
+            None => self.draw_solid(),
+        }
     }
 }
 
