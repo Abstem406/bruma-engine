@@ -10,13 +10,16 @@ comparta sus fondos.
 
 ## Estado del proyecto
 
-Fase 1 completada: `bruma run` muestra un fondo de color sólido detrás de
-todas las ventanas (verificado en niri: sobrevive a recargas de config).
-Esto es un proyecto en construcción — ver [PLAN.md](PLAN.md).
+Fase 2 completada: `bruma run --image foto.png` muestra una imagen a
+pantalla completa renderizada por wgpu/Vulkan (CPU idle, ~137 MB RAM).
+También: color sólido (Fase 1) y triángulo de prueba. En construcción —
+ver [PLAN.md](PLAN.md).
 
 ```bash
-bruma run          # fondo por defecto (gris azulado)
-bruma run 0x3B4252 # fondo en el color hex que quieras
+bruma run                  # fondo de color sólido
+bruma run 0x3B4252         # color hex a elección
+bruma run --gpu            # triángulo WGSL (prueba de pipeline)
+bruma run --image foto.png # imagen a pantalla completa
 ```
 
 ## Arquitectura
@@ -40,7 +43,7 @@ wgpu, Wayland ni Steam (ver [DECISIONS.md](DECISIONS.md)).
 |---|---|---|
 | 0 | workspace, CI, licencias, docs | ✅ esta estructura |
 | 1 | ventana de fondo Wayland (niri primero) | ✅ color sólido detrás de todo |
-| 2 | wgpu + WGSL | imagen a pantalla completa |
+| 2 | wgpu + WGSL | ✅ imagen a pantalla completa |
 | 3 | contrato de runtime + hot-reload | shader animado editado en vivo |
 | 4 | formato `.wallpaper` | `bruma validate` / `install` |
 | 5 | multi-monitor, pausas | wallpaper por pantalla |

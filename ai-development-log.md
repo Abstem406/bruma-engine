@@ -90,3 +90,35 @@
   completa (hito de la fase). Criterio de FPS/CPU aún por medir.
 - **Siguiente paso:** paso 2 de Fase 2 — quad y carga de imagen a
   textura; `bruma run --image foto.png`.
+
+---
+
+## 2026-09-16 — Fase 2 (paso 2): imagen a pantalla completa — hito
+
+- **Sesión:** continuación en Freebuff; el autor confirma el entorno
+  híbrido: iGPU AMD 660M (conectores HDMI-A-1 + eDP-1) + dGPU NVIDIA
+  (DP-*); salidas 2560x1440@144 (externa) y 1920x1200@165 (laptop).
+- **Hecho:**
+  - Refactor: `GpuContext` compartido (instancia, adaptador, device,
+    cola, superficie) + renderers independientes. Elección de adaptador
+    con `LowPower` deliberada para que la dGPU duerma; selección
+    explícita diferida a Fase 5.
+  - `ImageRenderer`: quad + textura RGBA8 sRGB subida con
+    `Queue::write_texture` (una sola vez) + shader de muestreo. La
+    imagen se ESTIRA (aspect ratio sin corregir: decisión de
+    cover/contain diferida al manifiesto .wallpaper, Fase 4).
+  - CLI: `bruma run --image IMG` (además de --gpu y color).
+  - `image` 0.25 con features mínimas (png+jpeg, sin rayon).
+- **Demo:** imagen rojo/azul de prueba: colores puros #FF2828 y
+  #2850FF verificados por histograma de grim en pantalla (detrás del
+  tinte translúcido del shell). Sobrevive a recarga de config de niri
+  con el pipeline activo.
+- **Eficiencia (criterio de la fase):** CPU 0 ticks en 5 s (idle total:
+  renderiza solo en configure; el compositor retiene el buffer), RAM
+  ~137 MB (driver Vulkan + wgpu). FPS: n/a por diseño en contenido
+  estático; se medirá en Fase 3 con shaders animados.
+- **Pendiente conocido:** multi-monitor — la superficie única solo
+  cubre una salida; eDP-1 del autor queda sin wallpaper (Fase 5, caso
+  urgente por ser su uso diario).
+- **Siguiente paso:** Fase 3 — contrato `WallpaperRuntime`, uniforms,
+  hot-reload WGSL, límite de FPS; primer shader animado.

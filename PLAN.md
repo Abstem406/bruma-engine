@@ -40,11 +40,14 @@
   verificar con hardware real; la re-configuración de superficie ya
   está cubierta).
 
-### Fase 2 — Renderizado con wgpu (3-6 semanas)
+### Fase 2 — Renderizado con wgpu (3-6 semanas) ✅
 - Triángulo → quad → textura → imagen PNG/JPEG a pantalla completa.
 - Crates: `bruma-renderer` (contrato) + `bruma-renderer-wgpu` (impl).
-- Demo: imagen estática como wallpaper.
-- Criterio: FPS estable, CPU casi idle, memoria contenida.
+- Demo: imagen estática como wallpaper ✅ (`bruma run --image IMG`;
+  evidencia en `demos/fase2/`).
+- Criterio: FPS estable (n/a en estático), CPU casi idle ✅ (medido:
+  idle total, renderiza solo en configure), memoria contenida ✅
+  (~137 MB con driver Vulkan).
 
 ### Fase 3 — Contrato de runtime + hot-reload (3-6 semanas)
 - Trait `WallpaperRuntime`: tiempo, delta, resolución, mouse,

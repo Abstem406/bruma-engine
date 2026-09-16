@@ -24,13 +24,13 @@ fn main() {
             );
             if std::env::args().count() == 1 {
                 eprintln!(
-                    "\nUso: bruma <COMANDO>\n\nComandos:\n  run [--gpu] [color]  Fondo detrás de las ventanas (sólido o triángulo wgpu)"
+                    "\nUso: bruma <COMANDO>\n\nComandos:\n  run [--gpu | --image IMG] [color]  Fondo detrás de las ventanas\n                                     (color sólido, triángulo o imagen)"
                 );
             }
         }
         Some(other) => {
             eprintln!(
-                "comando desconocido: {other}\n\nComandos disponibles:\n  run [--gpu] [color]  Fondo detrás de las ventanas"
+                "comando desconocido: {other}\n\nComandos disponibles:\n  run [--gpu | --image IMG] [color]  Fondo detrás de las ventanas"
             );
             std::process::exit(2);
         }
@@ -39,11 +39,21 @@ fn main() {
 fn run_command(args: &[String]) {
     let mut color_arg: Option<&str> = None;
     let mut gpu = false;
-    for arg in args {
-        match arg.as_str() {
+    let mut image_path: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
             "--gpu" => gpu = true,
+            "--image" => {
+                i += 1;
+                image_path = Some(args.get(i).map(|s| s.to_string()).unwrap_or_else(|| {
+                    eprintln!("--image requiere la ruta de una imagen");
+                    std::process::exit(2);
+                }));
+            }
             other => color_arg = Some(other),
         }
+        i += 1;
     }
 
     let color = color_arg
@@ -58,7 +68,13 @@ fn run_command(args: &[String]) {
 
     log::info!(
         "bruma run — modo {}",
-        if gpu { "wgpu" } else { "color sólido" }
+        if image_path.is_some() {
+            "imagen"
+        } else if gpu {
+            "wgpu"
+        } else {
+            "color sólido"
+        }
     );
     let mut window = bruma_platform::BackgroundWindow::new(Color::from_rgb_u32(color))
         .unwrap_or_else(|e| {
@@ -66,7 +82,21 @@ fn run_command(args: &[String]) {
             std::process::exit(1);
         });
 
-    if gpu {
+    if let Some(path) = &image_path {
+        // Fase 2, paso 2: imagen a pantalla completa (hito de la fase).
+        let renderer = unsafe {
+            bruma_renderer_wgpu::ImageRenderer::new_wayland(
+                window.display_ptr(),
+                window.surface_ptr(),
+                std::path::Path::new(path),
+            )
+        }
+        .unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        });
+        window.set_frame_renderer(Box::new(renderer));
+    } else if gpu {
         // Fase 2: renderer wgpu (triángulo de bienvenida). Hay que crearlo
         // ANTES del primer configure, para que pinte él el primer frame.
         let renderer = unsafe {

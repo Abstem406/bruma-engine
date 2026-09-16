@@ -16,3 +16,4 @@ raw-window-handle = "0.6"
 pollster = "0.4"
 thiserror.workspace = true
 log.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
