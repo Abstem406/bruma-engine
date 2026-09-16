@@ -254,3 +254,28 @@ parseo de `--param` era ambiguo con `=nombre=valor` (separo prefijo
 **Paquete demo:** `demos/fase4/paquetes/demo-src/` (manifiesto con param
 `intensidad`, shader de la Fase 3, preview generada) →
 `onda-bruma.wallpaper`.
+
+## 2026-09-16 — Lección: un test envió notificaciones reales al escritorio
+
+**Síntoma:** el usuario recibió dos burbujas ("shader rechazado — error de
+prueba" y "shader recuperado") sin estar editando nada.
+
+**Causa raíz:** el test `sin_bus_degrada_a_noop` de `notify.rs` llamaba a
+`DesktopNotifier::new()` asumiendo que en los tests no hay bus de sesión.
+En CI no lo hay; **en el escritorio del usuario sí** (quickshell/DMS).
+`cargo test` de la verificación de la Fase 4 conectó de verdad y envió
+dos `Notify` reales. Un test unitario no debe tener efectos en el
+mundo físico del usuario.
+
+**Corrección (3 piezas):**
+1. `DesktopNotifier::disabled()` — camino no-op construible sin bus,
+   para tests. Regla anotada en el doc: los tests jamás llaman a `new()`.
+2. Construcción del mensaje extraída a `build_notify_message()` (pura,
+   sin conexión): el spec del mensaje ahora se audita byte a byte en el
+   test (`get_items()`), sin tocar D-Bus.
+3. Test no-op reescrito sobre `disabled()` con aserciones de retorno
+   (`assert!(!...)`) en vez de "que no paniquee y ya".
+
+**Generalización para el resto del proyecto:** ninguna prueba debe
+depender del entorno del usuario (bus, sesión, GPU activa, pantallas).
+Todo efecto observable pasa por una frontera construible-en-disabled.

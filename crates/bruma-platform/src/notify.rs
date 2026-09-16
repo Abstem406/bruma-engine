@@ -66,6 +66,18 @@ impl DesktopNotifier {
         }
     }
 
+    /// Notifier apagado a mano: sin bus, sin efectos. Para pruebas del
+    /// camino no-op — jamás debe existir un test que llame a `new()` en
+    /// una máquina con escritorio, porque enviaría burbujas reales
+    /// (ocurrió: el test de esta unidad notificó al usuario desde
+    /// `cargo test`).
+    pub fn disabled() -> Self {
+        DesktopNotifier {
+            conn: None,
+            lock: Mutex::new(()),
+        }
+    }
+
     /// Envía la notificación y espera la respuesta del daemon (con
     /// [`NOTIFY_TIMEOUT`] de techo). Devuelve `true` si fue aceptada.
     fn send(&self, summary: &str, body: &str) -> bool {
@@ -74,33 +86,7 @@ impl DesktopNotifier {
         };
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
 
-        let mut msg = match Message::new_method_call(
-            "org.freedesktop.Notifications",
-            "/org/freedesktop/Notifications",
-            "org.freedesktop.Notifications",
-            "Notify",
-        ) {
-            Ok(m) => m,
-            Err(e) => {
-                log::debug!("no se pudo crear el mensaje Notify: {e}");
-                return false;
-            }
-        };
-
-        // Firma requerida por el spec: usssiasb. La última 'a' es el dict
-        // de hints a{sv}; actions va vacío (array con firma explícita).
-        let actions: [String; 0] = [];
-        msg.append_items(&[
-            MessageItem::Str("bruma".to_owned()), // app_name
-            MessageItem::UInt32(0),               // replaces_id (0 = nueva)
-            MessageItem::Str(String::new()),      // app_icon
-            MessageItem::Str(summary.to_owned()), // summary
-            MessageItem::Str(body.to_owned()),    // body
-            MessageItem::from(&actions[..]),      // actions (vacío)
-            hint_urgency(URGENCY_NORMAL),         // hints a{sv}
-            MessageItem::Int32(5000),             // expire_timeout ms
-        ]);
-
+        let msg = build_notify_message(summary, body);
         match conn.send_with_reply_and_block(msg, NOTIFY_TIMEOUT) {
             Ok(_) => true,
             Err(e) => {
@@ -131,6 +117,33 @@ impl DesktopNotifier {
 // devuelve el id asignado en la respuesta; se retendrá cuando el flujo
 // de edición de creadores lo pida.
 
+/// Construye el mensaje `Notify` completo (spec: firma usssiasb). Pura
+/// y sin bus: así los tests pueden auditar el mensaje byte a byte sin
+/// efectos en el escritorio. La última 'a' del dict es el de hints
+/// `a{sv}`; actions va vacío (array con firma explícita).
+fn build_notify_message(summary: &str, body: &str) -> Message {
+    let mut msg = Message::new_method_call(
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+        "Notify",
+    )
+    .expect("la firma del método Notify es constante y válida");
+
+    let actions: [String; 0] = [];
+    msg.append_items(&[
+        MessageItem::Str("bruma".to_owned()), // app_name
+        MessageItem::UInt32(0),               // replaces_id (0 = nueva)
+        MessageItem::Str(String::new()),      // app_icon
+        MessageItem::Str(summary.to_owned()), // summary
+        MessageItem::Str(body.to_owned()),    // body
+        MessageItem::from(&actions[..]),      // actions (vacío)
+        hint_urgency(URGENCY_NORMAL),         // hints a{sv}
+        MessageItem::Int32(5000),             // expire_timeout ms
+    ]);
+    msg
+}
+
 impl Default for DesktopNotifier {
     fn default() -> Self {
         Self::new()
@@ -149,15 +162,31 @@ impl std::fmt::Debug for DesktopNotifier {
 mod tests {
     use super::*;
 
-    /// Sin bus en los tests de CI: el notifier debe degradarse a no-op
-    /// sin colgarse ni tumbar nada (contrato best-effort).
+    /// Camino no-op: sin conexión, ambas llamadas devuelven false y no
+    /// tocan NADA. Usa `disabled()`, nunca `new()`: en una máquina con
+    /// sesión gráfica `new()` conectaría de verdad y `cargo test`
+    /// enviaría burbujas reales al escritorio del usuario.
     #[test]
-    fn sin_bus_degrada_a_noop() {
-        let n = DesktopNotifier::new();
-        // Puede que haya bus en una sesión de escritorio; en cualquier
-        // caso, ninguna de las dos llamadas puede paniquear.
-        let _ = n.shader_rejected("error de prueba");
-        let _ = n.shader_recovered();
+    fn deshabilitado_es_noop_total() {
+        let n = DesktopNotifier::disabled();
+        assert!(!n.shader_rejected("no debe salir por el bus"));
+        assert!(!n.shader_recovered());
+    }
+
+    /// El mensaje Notify cumple la firma del spec: 8 argumentos,
+    /// app_name "bruma", hints como dict a{sv}, expiración 5 s.
+    /// Puro: no hay conexión ni envío.
+    #[test]
+    fn mensaje_notify_cumple_spec() {
+        let msg = build_notify_message("título de prueba", "cuerpo de prueba");
+        let items = msg.get_items();
+        assert_eq!(items.len(), 8, "firma usssiasb: 8 argumentos");
+        assert_eq!(items[0], MessageItem::Str("bruma".to_owned()));
+        assert_eq!(items[1], MessageItem::UInt32(0));
+        assert_eq!(items[3], MessageItem::Str("título de prueba".to_owned()));
+        assert_eq!(items[4], MessageItem::Str("cuerpo de prueba".to_owned()));
+        assert_eq!(items[6].signature(), "a{sv}", "hints como dict");
+        assert_eq!(items[7], MessageItem::Int32(5000));
     }
 
     /// El hint de urgencia genera la firma a{sv} correcta.
