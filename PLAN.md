@@ -65,13 +65,29 @@
   escritorio vía D-Bus (verificado con quickshell/DMS en la demo;
   burbuja visible en captura y mensajes Notify capturados en el bus).
 
-### Fase 4 — Formato .wallpaper (2-4 semanas)
-- ZIP con `wallpaper.json`, `preview.png`, shaders, assets.
-- Schema: `format/type/title/entry/preview/permissions/min_engine`;
-  `type: video|web` reservados, no implementados.
-- Validación: anti path-traversal, rechazo de symlinks, límites de tamaño.
-- Comandos: `bruma validate`, `bruma install`.
-- Demo: instalar un paquete de ejemplo y verlo como fondo.
+### Fase 4 — Formato .wallpaper (2-4 semanas) — ✅
+- ✅ ZIP con `wallpaper.json`, `preview.png`, shaders, assets (crate `zip`
+  8.6, features mínimas; `serde` para el manifiesto con `deny_unknown_fields`).
+- ✅ Schema: `format/type/title/entry/preview/permissions/min_engine` +
+  `version` del paquete (para el layout versionado de instalación) y
+  `params` con nombre/label/default (los `u_params0..3` de la Fase 3
+  ganan identidad). `type: video|web` reservados, no implementados.
+- ✅ Validación: anti path-traversal (`enclosed_name`), rechazo de
+  symlinks, límites de tamaño (paquete 50 MB, archivo 20 MB, descomprimido
+  96 MB), entrada única e instalación con staging + rename atómico.
+- ✅ Comandos: `bruma validate`, `install`, `list`, `pack` y
+  `run --package nombre[:version]` con `--param=nombre=valor` resuelto
+  contra el manifiesto (los params toman el default; los CLI los
+  sobreescriben; nombre desconocido = error).
+- ✅ Demo verificada en niri: pack → validate → install → list → run
+  (animación viva por píxeles, `--param=intensidad=0.9` cambia el fondo,
+  nombre inexistente rechazado con error).
+- ✅ Seguridad demostrada: paquetes maliciosos (path traversal
+  `../../.bashrc`, symlink, zip bomb 40×4 MB) rechazados en `validate`
+  y en `install` con mensaje preciso; home intacto.
+- Desviación menor del schema original: campo `version` añadido (es lo
+  que ordena el directorio de instalación `~/.local/share/bruma/
+  wallpapers/NOMBRE/VERSION`).
 
 ### Fase 5 — Escritorio completo (4-8 semanas)
 - Multi-monitor con wallpaper por pantalla, DPI por salida.

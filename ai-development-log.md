@@ -202,3 +202,55 @@
 - **Siguiente paso:** Fase 4 — formato `.wallpaper` (manifiesto + zip):
   `bruma validate` / `install`; los parámetros ganan nombres y la
   imagen gana cover/contain.
+
+## 2026-09-16 — Fase 4: formato .wallpaper (manifiesto, seguridad, CLI completa)
+
+**Objetivo del hito:** el corazón del proyecto — un formato de paquete
+abierto y seguro, con herramientas para validar/instalar/ejecutar, y los
+parámetros de la Fase 3 ganando nombres reales.
+
+**Nuevos módulos en `bruma-package`:**
+- `manifest.rs`: schema `wallpaper.json` con `deny_unknown_fields`
+  (`format/type/title/entry/preview/permissions/min_engine/version/fps/
+  params`). `Param { name, label?, default }` — 16 máx. Validación:
+  claves sin espacios vacíos, defaults 0..=1, fps 1..=120, min_engine
+  "x.y.z" numérico, entry/preview dentro del paquete, `video|web`
+  reservados. `install_name()` deriva el slug desde el título.
+- `store.rs`: `validate()` (todas las entradas escaneadas), `install()`
+  con **staging + rename atómico** en
+  `~/.local/share/bruma/wallpapers/NOMBRE/VERSION`, `installed()`,
+  `pack()`. Seguridad: `enclosed_name` anti-traversal, symlinks
+  rechazados, límites 50 MB zip / 20 MB archivo / 96 MB descomprimido,
+  permisos 0o644 siempre.
+- `error.rs`: `PackError` con `thiserror`.
+
+**Runtime:** `ParamValue { name, value }` + `set_params()` en
+`BasicRuntime` (por defecto: valores del manifiesto). Los 4 primeros
+parámetros siguen llegando al shader como `u_params0..3`.
+
+**CLI:** subcomandos `validate` (salida legible), `install`, `list`,
+`pack` (con `-o`), y `run --package nombre[:version]` que resuelve el
+manifiesto (min_engine, fps por defecto, entry) y mapea
+`--param=nombre=valor` → posición. Corrección de bugs durante la fase:
+`pack` no parseaba `-o` (creó un archivo llamado literalmente "-o"), y el
+parseo de `--param` era ambiguo con `=nombre=valor` (separo prefijo
+`--param=` antes de parsear; `--param` desnudo = error de uso).
+
+**Demo verificada en niri** (`demos/fase4/`):
+- Ciclo completo: pack → validate → install → list → run --package.
+- Animación viva: píxel (5,5) cambia entre capturas (152,130,141 →
+  187,151,159).
+- Parámetros: `--param=intensidad=0.9` cambia el píxel; nombre
+  inexistente → `error: el paquete no declara el parámetro 'x'`;
+  `intensidad=1.5` se clampea a 1.0.
+- Seguridad con paquetes maliciosos fabricados con python zipfile:
+  - traversal (`../../.bashrc`): rechazado en validate E install;
+    ~/.bashrc intacto.
+  - symlink (`link.wgsl` → /etc/passwd): rechazado.
+  - bomba (40 entradas × 4 MB): rechazada por límite descomprimido.
+- Eficiencia: 18 ticks CPU / 5 s (~3.6% de un núcleo a 30 fps en
+  2560×1440), ~135 MB RAM.
+
+**Paquete demo:** `demos/fase4/paquetes/demo-src/` (manifiesto con param
+`intensidad`, shader de la Fase 3, preview generada) →
+`onda-bruma.wallpaper`.

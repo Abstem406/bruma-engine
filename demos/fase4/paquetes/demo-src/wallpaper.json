@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "type": "shader",
+  "title": "Onda bruma (demo)",
+  "version": "0.1.0",
+  "entry": "shader.wgsl",
+  "preview": "preview.png",
+  "params": [    {
+      "name": "intensidad",
+      "label": "Intensidad de la onda",
+      "default": 0.5
+    }
+  ],
+  "fps": 30
+}

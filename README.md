@@ -48,7 +48,7 @@ wgpu, Wayland ni Steam (ver [DECISIONS.md](DECISIONS.md)).
 | 1 | ventana de fondo Wayland (niri primero) | ✅ color sólido detrás de todo |
 | 2 | wgpu + WGSL | ✅ imagen a pantalla completa |
 | 3 | contrato de runtime + hot-reload | ✅ shader animado editado en vivo |
-| 4 | formato `.wallpaper` | `bruma validate` / `install` |
+| 4 | formato `.wallpaper` | ✅ `pack` → `validate` → `install` → `run --package` |
 | 5 | multi-monitor, pausas | wallpaper por pantalla |
 | 6 | plantillas para creadores | un extraño crea y comparte |
 | 7 | galería web (WASM/WebGPU) | previews vivos en el navegador |
@@ -60,6 +60,38 @@ cargo build          # compilar todo
 cargo test           # ejecutar los tests
 cargo run -p bruma   # probar la CLI
 ```
+
+## Paquetes `.wallpaper`
+
+Un wallpaper se distribuye como un zip con `wallpaper.json`, una preview y
+sus shaders:
+
+```bash
+bruma pack mi-fondo/ -o mi-fondo.wallpaper   # empaquetar un directorio
+bruma validate mi-fondo.wallpaper            # validar (¿es seguro y correcto?)
+bruma install mi-fondo.wallpaper             # instalar en ~/.local/share/bruma
+bruma list                                   # ver lo instalado
+bruma run --package mi-fondo                 # usarlo como fondo
+bruma run --package mi-fondo --param=velocidad=0.8
+```
+
+El manifiesto declara parámetros con nombre que la CLI valida y resuelve:
+
+```json
+{
+  "format": 1,
+  "type": "shader",
+  "title": "Mi fondo",
+  "version": "0.1.0",
+  "entry": "shader.wgsl",
+  "preview": "preview.png",
+  "params": [{ "name": "velocidad", "label": "Velocidad", "default": 0.5 }],
+  "fps": 30
+}
+```
+
+La validación rechaza paquetes maliciosos: rutas con path traversal,
+symlinks dentro del zip y bombas de descompresión.
 
 ## Licencia
 

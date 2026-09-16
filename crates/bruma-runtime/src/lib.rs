@@ -179,6 +179,22 @@ impl BasicRuntime {
         self
     }
 
+    /// Sustituye los parámetros declarados por los dados (máximo 4: los
+    /// que caben en el uniform block). La usa la CLI al cargar un
+    /// paquete, cuyos nombres vienen del manifiesto.
+    pub fn set_params(&mut self, mut params: Vec<ParamValue>) {
+        params.truncate(4);
+        self.params = params;
+    }
+
+    /// Fija el valor del parámetro en la posición `index` (0..3), que es
+    /// como llega a la GPU (`u_params0..3`).
+    pub fn set_param_at(&mut self, index: usize, value: f32) {
+        if let Some(p) = self.params.get_mut(index) {
+            p.value = value.clamp(0.0, 1.0);
+        }
+    }
+
     /// Actualiza la posición del cursor (la llama la plataforma). Pasa
     /// por `state.mouse_x/y`, que el renderizador copia a los uniforms.
     pub fn set_mouse(&mut self, x: f32, y: f32) {
