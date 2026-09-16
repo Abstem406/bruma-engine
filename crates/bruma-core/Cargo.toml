@@ -1,0 +1,11 @@
+[package]
+name = "bruma-core"
+description = "Tipos base y contratos compartidos del motor bruma (crate puro: sin wgpu, Wayland ni Steam)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+publish = false
+
+[dependencies]

@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bruma-core",
+    "crates/bruma-package",
+    "crates/bruma-runtime",
+    "crates/bruma-renderer",
+    "crates/bruma-platform",
+    "crates/bruma",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["bruma-engine contributors"]
+
+[workspace.dependencies]
+bruma-core = { path = "crates/bruma-core", version = "0.1.0" }
+bruma-package = { path = "crates/bruma-package", version = "0.1.0" }
+bruma-runtime = { path = "crates/bruma-runtime", version = "0.1.0" }
+bruma-renderer = { path = "crates/bruma-renderer", version = "0.1.0" }
+bruma-platform = { path = "crates/bruma-platform", version = "0.1.0" }

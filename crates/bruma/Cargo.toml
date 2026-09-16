@@ -1,0 +1,12 @@
+[package]
+name = "bruma"
+description = "CLI del motor bruma: run, install, new, validate, list"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+publish = false
+
+[dependencies]
+bruma-core.workspace = true

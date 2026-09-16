@@ -1,0 +1,12 @@
+[package]
+name = "bruma-runtime"
+description = "Contrato de runtime para wallpapers: tiempo, delta, resolución, mouse y parámetros (Fase 3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+publish = false
+
+[dependencies]
+bruma-core.workspace = true

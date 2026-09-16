@@ -1,0 +1,12 @@
+[package]
+name = "bruma-renderer"
+description = "Contrato de renderizado del motor bruma; la implementación wgpu vivirá en bruma-renderer-wgpu (Fase 2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+publish = false
+
+[dependencies]
+bruma-core.workspace = true
