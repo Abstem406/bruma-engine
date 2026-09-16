@@ -168,3 +168,37 @@
   (salidas apagadas), audio (se activará con el primer caso real).
 - **Siguiente paso:** Fase 4 — formato `.wallpaper` (manifiesto +
   zip): `bruma validate` / `install`, y ahí los params ganan nombres.
+
+## 2026-09-16 — Fase 3, extra: aviso de shader rechazado como notificación de escritorio (D11)
+
+- **Motivación:** en la sesión de hot-reload en vivo quedó claro que el
+  aviso de "shader rechazado" solo iba al log: invisible si bruma corre
+  como servicio sin terminal. El creador guardaría su shader roto y no
+  sabría por qué no cambia nada.
+- **Hecho:**
+  - `bruma-platform/src/notify.rs`: `DesktopNotifier` sobre
+    `org.freedesktop.Notifications` (crate `dbus` 0.9.12, dlopen de
+    libdbus — presente en todo sistema con D-Bus; sin bindgen ni dep de
+    build). Best-effort estricto: sin bus de sesión degrada a no-op,
+    timeout de 300 ms, errores deglutidos con log de debug. 2 tests.
+  - `AnimatedRenderer`: callback opcional con eventos tipados
+    `ReloadEvent` (Applied / Rejected{error} / Recovered) y dedup de
+    errores idénticos (los autosaves reescriben el mismo archivo roto).
+    La capa gráfica no conoce D-Bus (frontera D6/D11).
+  - CLI: convierte Rejected/Recovered en notificaciones (primera línea
+    del error de naga, recorte a 140 chars, debounce de 2 s).
+- **Demo verificada en niri (con quickshell/DMS como daemon):**
+  dbus-monitor capturó los mensajes `Notify` con app_name "bruma" para
+  "shader rechazado" (cuerpo: primera línea del error de naga recortada
+  con …) y "shader recuperado"; la burbuja fue visible en pantalla
+  (RMSE 0.46 entre captura con y sin popup en la región superior). Al
+  arreglar el shader llegó la segunda burbuja. Procesos y escritorio
+  restaurados al terminar.
+- **Incidentes de sesión (honestos):** dos guardadas rotas mías al
+  construir el edit de prueba (el wallpaper sobrevivió ambas, como debe
+  ser); un `pkill -f dbus-monitor` que se atrapó a sí mismo vía el
+  wrapper bash (usar `pkill -x`); y un alias de tipo colocado dentro del
+  doc-comment del struct que clippy rechazó con razón.
+- **Siguiente paso:** Fase 4 — formato `.wallpaper` (manifiesto + zip):
+  `bruma validate` / `install`; los parámetros ganan nombres y la
+  imagen gana cover/contain.

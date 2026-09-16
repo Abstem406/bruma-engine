@@ -6,6 +6,7 @@
 //! fases: `validate`/`install` (F4), `new`/`pack` (F6).
 
 use bruma_core::Color;
+use std::time::Duration;
 
 fn main() {
     // Logging mínimo sin dependencias; cuando el proyecto lo necesite se
@@ -122,7 +123,7 @@ fn run_command(args: &[String]) {
         // Fase 3: shader animado con hot-reload. El renderer se crea ANTES
         // del primer configure para que pinte él el primer frame; el bucle
         // animado lo conduce el runtime (ver abajo).
-        let renderer = unsafe {
+        let mut renderer = unsafe {
             bruma_renderer_wgpu::AnimatedRenderer::new_wayland(
                 window.display_ptr(),
                 window.surface_ptr(),
@@ -133,6 +134,44 @@ fn run_command(args: &[String]) {
             eprintln!("error: {e}");
             std::process::exit(1);
         });
+
+        // El aviso de "shader rechazado" debe verse aunque bruma corra
+        // como servicio sin terminal: notificación de escritorio vía
+        // D-Bus (best-effort; sin bus de sesión es un no-op). El dedup
+        // de eventos ya lo hace el renderer; aquí solo amortiguamos
+        // notificaciones idénticas a menos de 2 s (típico: varios
+        // guardados seguidos del mismo autosave).
+        let notifier = std::rc::Rc::new(bruma_platform::DesktopNotifier::new());
+        let mut last_notify: Option<(String, std::time::Instant)> = None;
+        const MIN_NOTIFY_GAP: Duration = Duration::from_secs(2);
+        renderer.set_reload_callback(Box::new(move |event| {
+            use bruma_renderer_wgpu::ReloadEvent;
+            match event {
+                ReloadEvent::Rejected { error } => {
+                    // naga puede dar errores largos multi-línea: nos
+                    // quedamos con la primera línea y recortamos a 140
+                    // bytes para que la burbuja sea legible.
+                    let first_line = error.lines().next().unwrap_or(error);
+                    let mut brief: String = first_line.chars().take(140).collect();
+                    if brief.len() < first_line.len() {
+                        brief.push('…');
+                    }
+                    let now = std::time::Instant::now();
+                    let fresh = last_notify.as_ref().is_none_or(|(m, t)| {
+                        now.duration_since(*t) >= MIN_NOTIFY_GAP || *m != brief
+                    });
+                    if fresh {
+                        last_notify = Some((brief.clone(), now));
+                        notifier.shader_rejected(&brief);
+                    }
+                }
+                ReloadEvent::Recovered => {
+                    last_notify = None;
+                    notifier.shader_recovered();
+                }
+                ReloadEvent::Applied => {}
+            }
+        }));
         window.set_frame_renderer(Box::new(renderer));
     } else if let Some(path) = &image_path {
         // Fase 2, paso 2: imagen a pantalla completa (hito de la fase).

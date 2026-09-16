@@ -72,3 +72,18 @@ Vídeo (mpv/GStreamer) y captura de audio (PipeWire) arrastran dependencias
 enormes y casos de uso distintos. Reservados en el manifiesto (`type: video`),
 implementación futura. Audio como input de shaders: opcional y apagado por
 defecto (privacidad) cuando llegue.
+
+## D11 — Notificaciones de escritorio vía D-Bus, best-effort
+- Qué: los avisos al usuario (shader rechazado/recuperado en hot-reload)
+  van por `org.freedesktop.Notifications` (mako, dunst, quickshell/DMS...)
+  con el crate `dbus` 0.9 (dlopen de libdbus: sin bindgen ni dep de build).
+- Política: **best-effort estricto**. Sin bus de sesión, el canal se
+  degrada a no-op; el envío tiene timeout de 300 ms; ningún error de
+  notificación puede afectar al render ni al proceso. Un wallpaper no
+  falla por su canal de avisos.
+- Arquitectura: el renderer emite eventos tipados (`ReloadEvent`:
+  Applied/Rejected/Recovered con dedup de autosaves idénticos); la CLI
+  decide qué hacer con ellos (hoy: notificar con debounce de 2 s). Así
+  la capa gráfica no conoce D-Bus y la futura UI (Fase 6) podrá
+  consumir los mismos eventos.
+- Urgencia "normal" siempre: los avisos de bruma nunca son críticos.

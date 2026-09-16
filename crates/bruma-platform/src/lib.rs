@@ -22,6 +22,10 @@
 
 #![forbid(unsafe_code)]
 
+mod notify;
+
+pub use notify::DesktopNotifier;
+
 use bruma_core::Color;
 use bruma_renderer::{FrameDecision, FrameRenderer, WallpaperRuntime};
 use smithay_client_toolkit::reexports::client as wayland_client;

@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 bruma-core.workspace = true
 bruma-renderer.workspace = true
+dbus = "0.9.12"
 log = "0.4.34"
 # poll con timeout sobre el socket de Wayland (bucle animado, Fase 3).
 # Mismas features que pide wayland-backend: cero dependencias extra.

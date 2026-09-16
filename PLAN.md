@@ -61,6 +61,9 @@
   hot-reload en vivo (vino → verde → shader roto rechazado →
   recuperado), CPU 4% a 30 fps en 2560x1440, sobrevive a recarga de
   config de niri.
+- Extra (D11): shader rechazado/recuperado avisa por notificación de
+  escritorio vía D-Bus (verificado con quickshell/DMS en la demo;
+  burbuja visible en captura y mensajes Notify capturados en el bus).
 
 ### Fase 4 — Formato .wallpaper (2-4 semanas)
 - ZIP con `wallpaper.json`, `preview.png`, shaders, assets.

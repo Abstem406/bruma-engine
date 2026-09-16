@@ -1,0 +1,51 @@
+1789596845847189160 | [bruma] INFO: bruma run — modo shader animado (30 fps)
+1789596845927770803 | [bruma] ERROR: GENERAL [Loader Message (0x0)]
+1789596845928873754 | 	liblsfg-vk-layer.x86.so: cannot open shared object file: No such file or directory
+1789596845929758485 | [bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x56206b936740, name: ?)
+1789596845930538359 | [bruma] ERROR: GENERAL [Loader Message (0x0)]
+1789596845931287846 | 	loader_create_instance_chain: Failed to find 'vkGetInstanceProcAddr' in layer "liblsfg-vk-layer.so"
+1789596845932613816 | [bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x56206b936740, name: ?)
+1789596845975110730 | [bruma] INFO: Found 6 cooperative matrix configurations supported by wgpu
+1789596846031181811 | [bruma] ERROR: GENERAL [Loader Message (0x0)]
+1789596846032343292 | 	loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer "liblsfg-vk-layer.so".  Skipping layer.
+1789596846033560778 | [bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x56206b936740, name: ?)
+1789596846039528623 | [bruma] INFO: wgpu: adaptador AMD Radeon 660M (RADV REMBRANDT) (IntegratedGpu), backend Vulkan
+1789596846051993077 | [bruma] INFO: ventana de fondo entra en salida OutputInfo { name: Some("HDMI-A-1"), logical_size: None }
+1789596846053023492 | [bruma] INFO: fondo activo: 2560x1440px — Ctrl-C para salir
+1789596981099805050 | [bruma] WARN: hot-reload ignorado: error compilando el shader: error: expected `(`, found "struct"
+1789596981100670495 |   ┌─ wgsl:3:1
+1789596981101863926 |   │
+1789596981102806145 | 3 │ struct Uniforms {
+1789596981103697248 |   │ ^^^^^^ expected `(`
+1789596981104685073 | 
+1789596981105898211 | 
+1789596982649494764 | [bruma] INFO: hot-reload: shader aplicado
+1789597076169809445 | [bruma] INFO: bruma run — modo shader animado (30 fps)
+1789597076263520411 | [bruma] ERROR: GENERAL [Loader Message (0x0)]
+1789597076264628692 | 	liblsfg-vk-layer.x86.so: cannot open shared object file: No such file or directory
+1789597076265443813 | [bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x5594ad220740, name: ?)
+1789597076266386382 | [bruma] ERROR: GENERAL [Loader Message (0x0)]
+1789597076267319845 | 	loader_create_instance_chain: Failed to find 'vkGetInstanceProcAddr' in layer "liblsfg-vk-layer.so"
+1789597076268223812 | [bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x5594ad220740, name: ?)
+1789597076322424973 | [bruma] INFO: Found 6 cooperative matrix configurations supported by wgpu
+1789597076383292010 | [bruma] ERROR: GENERAL [Loader Message (0x0)]
+1789597076384247614 | 	loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer "liblsfg-vk-layer.so".  Skipping layer.
+1789597076385082902 | [bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x5594ad220740, name: ?)
+1789597076391597134 | [bruma] INFO: wgpu: adaptador AMD Radeon 660M (RADV REMBRANDT) (IntegratedGpu), backend Vulkan
+1789597076405350137 | [bruma] INFO: ventana de fondo entra en salida OutputInfo { name: Some("HDMI-A-1"), logical_size: None }
+1789597076406778188 | [bruma] INFO: fondo activo: 2560x1440px — Ctrl-C para salir
+1789597079219245035 | [bruma] INFO: hot-reload: shader aplicado
+1789597090581202108 | ===SAVE-A: guardo paleta ámbar===
+1789597090616329325 | [bruma] INFO: hot-reload: shader aplicado
+1789597092126081255 | ===SAVE-B: guardo edit de depuración (azul plano)===
+1789597092149775674 | [bruma] WARN: hot-reload ignorado: error compilando el shader: error: expected `(`, found "struct"
+1789597092151208465 |   ┌─ wgsl:3:1
+1789597092152316205 |   │
+1789597092153364633 | 3 │ struct Uniforms {
+1789597092154580126 |   │ ^^^^^^ expected `(`
+1789597092155876680 | 
+1789597092156997996 | 
+1789597137203468066 | ===SAVE-C: guardo edit de depuración (azul plano)===
+1789597137219722035 | [bruma] INFO: hot-reload: shader aplicado
+1789597138709747097 | ===SAVE-D: restauro paleta vino===
+1789597138721562091 | [bruma] INFO: hot-reload: shader aplicado

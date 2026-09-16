@@ -605,6 +605,9 @@ fn compile_wgsl(
     }))
 }
 
+/// Callback de eventos de recarga; ver [`AnimatedRenderer::set_reload_callback`].
+type ReloadCallback = Box<dyn FnMut(&ReloadEvent)>;
+
 /// Renderer de la Fase 3: shader WGSL animado a pantalla completa.
 ///
 /// - **Uniforms**: tiempo, parámetro 0, posición del mouse y resolución,
@@ -628,6 +631,27 @@ pub struct AnimatedRenderer {
     /// Último tamaño configurado (para repintar tras el reload sin
     /// esperar un configure nuevo).
     last_size: (u32, u32),
+    /// Callback opcional de eventos de recarga (p. ej. para convertir un
+    /// rechazo de shader en notificación de escritorio). Se invoca desde
+    /// el hilo del bucle, nunca en la ruta del render.
+    on_reload: Option<ReloadCallback>,
+    /// Último error de compilación de hot-reload: dedup de autosaves que
+    /// reescriben el mismo contenido roto y aviso de recuperación con el
+    /// pipeline ya activo.
+    last_error: Option<String>,
+}
+
+/// Evento de recarga de shader para el callback de
+/// [`AnimatedRenderer::set_reload_callback`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReloadEvent {
+    /// El shader se aplicó (primera carga o hot-reload válido).
+    Applied,
+    /// El shader nuevo no compila; el pipeline anterior sigue en
+    /// pantalla. `error` es el mensaje de naga recortado.
+    Rejected { error: String },
+    /// Tras uno o más rechazos, el shader volvió a compilar.
+    Recovered,
 }
 
 impl AnimatedRenderer {
@@ -704,7 +728,15 @@ impl AnimatedRenderer {
             bind_group,
             pipeline,
             last_size: (0, 0),
+            on_reload: None,
+            last_error: None,
         })
+    }
+
+    /// Instala el callback de eventos de recarga (p. ej. para convertir
+    /// un rechazo de shader en notificación de escritorio).
+    pub fn set_reload_callback(&mut self, cb: ReloadCallback) {
+        self.on_reload = Some(cb);
     }
 
     /// Mtime del archivo, si se puede stat-ear.
@@ -758,12 +790,21 @@ impl AnimatedRenderer {
             }))
     }
 
+    /// Emite un evento por el callback si hay callback instalado.
+    fn emit(&mut self, event: &ReloadEvent) {
+        if let Some(cb) = self.on_reload.as_mut() {
+            cb(event);
+        }
+    }
+
     /// Recarga el shader si el archivo cambió desde la última carga.
     ///
     /// Estrategia: mtime perezoso (una stat por frame, ~1µs) + validación
     /// síncrona con naga. Si el archivo nuevo no compila, el pipeline
-    /// anterior se conserva y el error queda en el log; cuando el archivo
-    /// vuelva a ser válido, se aplicará en el próximo frame.
+    /// anterior se conserva, se registra el error y se emite
+    /// [`ReloadEvent::Rejected`] (con dedup: mismos bytes = un solo
+    /// evento). Cuando el archivo vuelve a ser válido, se emite
+    /// [`ReloadEvent::Recovered`] si había errores previos.
     fn maybe_reload(&mut self, width: u32, height: u32) {
         if Self::mtime(&self.shader_path) == self.last_mtime {
             return;
@@ -778,10 +819,26 @@ impl AnimatedRenderer {
             Ok(pipeline) => {
                 log::info!("hot-reload: shader aplicado");
                 self.pipeline = pipeline;
+                if self.last_error.take().is_some() {
+                    // Recuperación tras rechazo(s): el pipeline nuevo ya
+                    // está en pantalla; avisamos al canal configurado.
+                    self.emit(&ReloadEvent::Recovered);
+                } else {
+                    self.emit(&ReloadEvent::Applied);
+                }
                 // Repinta inmediatamente con el shader nuevo.
                 self.draw(width, height);
             }
-            Err(e) => log::warn!("hot-reload ignorado: {e}"),
+            Err(e) => {
+                let msg = e.to_string();
+                log::warn!("hot-reload ignorado: {e}");
+                // Dedup: si el error es el mismo que el anterior, no
+                // re-emitir (los editores reescriben el archivo igual).
+                if self.last_error.as_ref() != Some(&msg) {
+                    self.last_error = Some(msg.clone());
+                    self.emit(&ReloadEvent::Rejected { error: msg });
+                }
+            }
         }
     }
 
