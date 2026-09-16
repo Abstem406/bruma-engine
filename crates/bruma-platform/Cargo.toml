@@ -10,3 +10,6 @@ publish = false
 
 [dependencies]
 bruma-core.workspace = true
+log = "0.4.34"
+smithay-client-toolkit = { version = "0.21.1", default-features = false }
+thiserror = "2.0.20"

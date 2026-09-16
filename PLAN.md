@@ -29,13 +29,16 @@
 - `PLAN.md`, `DECISIONS.md`, `ai-development-log.md`.
 - Demo: `cargo run -p bruma` compila y saluda; tests del core en verde.
 
-### Fase 1 — Ventana de fondo en Wayland (2-5 semanas)
+### Fase 1 — Ventana de fondo en Wayland (2-5 semanas) ✅
 - `wlr-layer-shell` vía `smithay-client-toolkit` (NO winit).
 - Banco de pruebas de referencia: **niri** (+ DankMaterialShell).
 - Sin wgpu todavía: buffer de color sólido.
 - Demo: un rectángulo de color detrás de todas las ventanas.
-- Criterio de aceptación: sobrevive a recarga de config de niri y a
-  desconexión/reconexión de salida.
+  (`bruma run [color]`; evidencia en `demos/fase1/`).
+- Criterio de aceptación: sobrevive a recarga de config de niri ✅
+  (verificado) y a desconexión/reconexión de salida (pendiente de
+  verificar con hardware real; la re-configuración de superficie ya
+  está cubierta).
 
 ### Fase 2 — Renderizado con wgpu (3-6 semanas)
 - Triángulo → quad → textura → imagen PNG/JPEG a pantalla completa.

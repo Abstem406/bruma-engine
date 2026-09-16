@@ -1,0 +1,6 @@
+[bruma] INFO: bruma run — color 0x1D2021
+[bruma] INFO: ventana de fondo entra en salida OutputInfo { name: Some("HDMI-A-1"), logical_size: None }
+[bruma] INFO: fondo activo: 2560x1440px — Ctrl-C para salir
+[bruma] INFO: bruma run — color 0x1D2021
+[bruma] INFO: ventana de fondo entra en salida OutputInfo { name: Some("HDMI-A-1"), logical_size: None }
+[bruma] INFO: fondo activo: 2560x1440px — Ctrl-C para salir
