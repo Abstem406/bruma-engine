@@ -479,3 +479,81 @@ global (D12) congela la animación — la verificación del shader con dos
 params distintos por pantalla queda pendiente de tener cargador a mano
 (el camino de overrides está testeado y el pipeline de color/animado
 mixto quedó demostrado).
+
+## 2026-09-17 — Decisión: sin autoarranque; bruma solo manual
+
+- **Contexto:** la config actual usa color sólido en el monitor externo
+  (HDMI-A-1) y aún no hay fondos definitivos, así que el fondo de
+  momento solo se lanza cuando se usa de forma directa.
+- **Hecho:** `systemctl --user disable --now bruma.service` → la unidad
+  queda escrita pero `disabled` (sin enlace en
+  `graphical-session.target.wants`): ya no arranca con la sesión.
+  Reversible con `bruma service install` (rehabilita y arranca).
+- **Uso manual:** `bruma run` (carga la config persistente igual que el
+  servicio; para dejarlo vivo tras cerrar la terminal, el servicio o
+  `setsid`).
+
+## 2026-09-17 — Traducción completa del código al español
+
+- **Contexto:** las fases 0–2 se escribieron con comentarios en
+  español, pero desde la Fase 3 los crates puros
+  (`bruma-core`, `bruma-runtime`, `bruma-renderer`, `bruma-package`)
+  quedaron mayormente en inglés.
+- **Hecho:** traducidos doc-comments, comentarios internos y
+  **mensajes de error visibles al usuario** (todos los `#[error(...)]`
+  de `PackError`, `BrumaError` y las validaciones del manifiesto).
+- **Tests actualizados en consecuencia:** las aserciones que
+  verificaban texto de errores (`contains("symlink")`,
+  `contains("reserved")`, `contains("too large")`, `contains("unsafe")`,
+  `contains("duplicate")`) ahora esperan el texto traducido. Los
+  mensajes son contrato observable: el test del mensaje cambia con el
+  mensaje.
+- **Verificación:** fmt/clippy/tests del workspace en verde (40 tests).
+
+## 2026-09-17 — bruma se independiza: proyecto propio en ~/Documents/DEV
+
+- **Decisión:** bruma ya no vive dentro de `niri-tui-tools`; se mueve
+  a `~/Documents/DEV/bruma-engine` como proyecto independiente (tiene
+  su propio repo git, licencias, CI y roadmap — nunca fue parte real
+  de las herramientas del compositor).
+- **Movimiento:** `mv` simple, sin historial que reescribir: en el
+  repo exterior `bruma-engine/` era untracked; el repo propio viaja
+  intacto con todos sus cambios.
+- **Rutas afectadas:** la unidad de usuario `bruma.service` apuntaba
+  al `target/debug/bruma` bajo la ruta vieja → se reescribe `ExecStart`
+  con la ruta nueva (la unidad sigue `disabled`: bruma sigue siendo
+  de ejecución manual según la decisión de hoy).
+
+## 2026-09-17 — Fix latente: rustix::runtime (API experimental) → libc::sigaction
+
+- **Síntoma:** `cargo build` del workspace en verde pero
+  `cargo install --path crates/bruma` falla con E0603 (`module
+  runtime is private`).
+- **Causa raíz:** `hup.rs` (canal SIGHUP→eventfd de la Fase 5) usaba
+  `rustix::runtime::kernel_sigaction`. La propia rustix lo documenta
+  como API experimental "libc-like" con el módulo **mangled con una
+  cadena aleatoria que rota entre versiones**: el lock del workspace
+  tenía 1.1.4 (funciona) y `cargo install` re-resolvió a 1.1.5, donde
+  el alias `runtime` pasó a `pub(crate)`. Bomba de tiempo de dos vías:
+  cualquier build fuera del workspace y la próxima actualización del
+  lock.
+- **Corrección:** reemplazo por `libc::sigaction` (estable para
+  siempre; libc ya estaba en el árbol vía wayland-backend/dbus, cero
+  dependencias nuevas). `install()` conserva su firma
+  (`io::Result<HupChannel>`). Detalle: en Linux `sighandler_t` es
+  `usize`, así que el puntero de función se castea `as *const () as
+  usize` (patrón recomendado por clippy) y `libc::SIG_IGN` entra como
+  constante. En el Drop se restaura `SIG_IGN` (la disposición con la
+  que Rust arranca el proceso; `SIG_DFL` mataría el proceso con el
+  próximo HUP).
+- **Limpieza:** `features` de rustix reducidos a `event`+`std`
+  (elimina linux-raw-sys/prctl del árbol).
+- **Verificación:** clippy del workspace con **0 warnings**, 40 tests
+  en verde, y `cargo install` exitoso: el binario de `~/.cargo/bin`
+  (el del PATH) se reconstruyó desde la nueva ubicación independiente
+  con la traducción incluida (`config show`, `list` y subcomandos
+  verificados).
+- **Lección generalizada:** una dependencia solo está "en el lock"
+  temporalmente; nunca construir sobre APIs marcadas experimentales u
+  ocultas aunque compilen hoy. El gate del proyecto (`cargo install`
+  como prueba de build de usuario final) entra al repertorio.

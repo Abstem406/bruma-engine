@@ -1,0 +1,31 @@
+[bruma] INFO: paquete 'Onda bruma (demo)' 0.1.0 — /home/abstem/.local/share/bruma/wallpapers/onda-bruma-demo/0.1.0
+[bruma] INFO: bruma run — modo shader animado (30 fps)
+[bruma] ERROR: GENERAL [Loader Message (0x0)]
+	liblsfg-vk-layer.x86.so: cannot open shared object file: No such file or directory
+[bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x5591a7e11e10, name: ?)
+[bruma] ERROR: GENERAL [Loader Message (0x0)]
+	loader_create_instance_chain: Failed to find 'vkGetInstanceProcAddr' in layer "liblsfg-vk-layer.so"
+[bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x5591a7e11e10, name: ?)
+[bruma] INFO: Found 6 cooperative matrix configurations supported by wgpu
+[bruma] ERROR: GENERAL [Loader Message (0x0)]
+	loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer "liblsfg-vk-layer.so".  Skipping layer.
+[bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x5591a7e11e10, name: ?)
+[bruma] INFO: wgpu: adaptador AMD Radeon 660M (RADV REMBRANDT) (IntegratedGpu), backend Vulkan (compartido entre salidas)
+[bruma] INFO: toplevel 'ELDEN RING™' fullscreen=true (estados: [3, 2])
+[bruma] INFO: toplevel '~ - fish' output_enter ObjectId(wl_output@8) (total: 1)
+[bruma] INFO: toplevel 'Freebuff: continua' output_enter ObjectId(wl_output@8) (total: 1)
+[bruma] INFO: toplevel 'Soporte del Yuayooo | 𝐑𝐨𝐮𝐧𝐝𝐭𝐚𝐛𝐥𝐞 𝐖𝐚𝐧𝐝𝐞𝐫𝐞𝐫𝐬🔥 - Discord' output_enter ObjectId(wl_output@8) (total: 1)
+[bruma] INFO: toplevel 'ELDEN RING™' output_enter ObjectId(wl_output@9) (total: 1)
+[bruma] INFO: toplevel 'Cheat Engine (Admin)' output_enter ObjectId(wl_output@9) (total: 1)
+[bruma] INFO: superficie de fondo creada en salida Some("eDP-1")
+[bruma] INFO: superficie de fondo creada en salida Some("HDMI-A-1")
+[bruma] INFO: fondo activo en Some("eDP-1"): 1920x1200px (gpu) — Ctrl-C para salir
+[bruma] INFO: fondo activo en Some("HDMI-A-1"): 2560x1440px (gpu) — Ctrl-C para salir
+[bruma] INFO: salida Some("eDP-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: toplevel 'ELDEN RING™' fullscreen=false (estados: [2])
+[bruma] INFO: toplevel 'ELDEN RING™' fullscreen=true (estados: [3, 2])
+[bruma] INFO: toplevel 'Freebuff: continua' fullscreen=true (estados: [3, 2])
+[bruma] INFO: salida Some("eDP-1"): pausa fullscreen = true
+[bruma] INFO: toplevel 'Freebuff: continua' fullscreen=false (estados: [2])
+[bruma] INFO: salida Some("eDP-1"): pausa fullscreen = false

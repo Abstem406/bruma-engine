@@ -13,9 +13,15 @@ bruma-core.workspace = true
 bruma-renderer.workspace = true
 dbus = "0.9.12"
 log = "0.4.34"
-# poll con timeout sobre el socket de Wayland (bucle animado, Fase 3).
-# Mismas features que pide wayland-backend: cero dependencias extra.
+# poll con timeout sobre el socket de Wayland (bucle animado, Fase 3)
+# y `event` = eventfd+poll para el canal SIGHUP→eventfd de recarga de
+# config en caliente (Fase 5). Para el sigaction del canal se usa libc
+# directamente (ya en el árbol): el módulo `runtime` de rustix es una
+# API experimental con nombre que rota entre versiones.
+# Mismo crate que pide wayland-backend: cero dependencias nuevas.
 rustix = { version = "1.1", default-features = false, features = ["event", "std"] }
+# sigaction(2) del canal SIGHUP (estable, sin sorpresas de versión):
+libc = "0.2"
 smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["system"] }
 thiserror = "2.0.20"
 wayland-protocols-wlr = { version = "0.3.12", default-features = false, features = ["client"] }

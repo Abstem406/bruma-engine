@@ -101,6 +101,7 @@ dependencies = [
  "bruma-core",
  "bruma-renderer",
  "dbus",
+ "libc",
  "log",
  "rustix",
  "smithay-client-toolkit",

@@ -22,8 +22,12 @@
 //! NON-GOALS (ver DECISIONS.md): GNOME/Mutter en v1 (sin layer-shell);
 //! vídeo y audio en v1.
 
-#![forbid(unsafe_code)]
+// deny y no forbid: el canal SIGHUP (hup.rs) necesita exactamente las
+// operaciones unsafe de señal/fd que ninguna API segura cubre; se
+// aíslan ahí con allow puntual y el resto del crate lo mantiene seco.
+#![deny(unsafe_code)]
 
+mod hup;
 mod notify;
 mod pause;
 mod toplevel;
@@ -107,6 +111,13 @@ struct BackgroundState {
     pause: pause::SessionPauseWatcher,
     /// Último estado de la pausa global, para log de transiciones.
     last_global_pause: bool,
+    /// Canal SIGHUP→eventfd (recarga de config en caliente). `None` si
+    /// la instalación falló (raro: sin eventfd el kernel sería exótico);
+    /// entonces `bruma` no recarga por señal y el resto no cambia.
+    hup: Option<hup::HupChannel>,
+    /// Callback de recarga de config (lo instala el CLI): `true` = hubo
+    /// recarga y el bucle reconstituye renderers y repinta.
+    on_hup: Option<Box<dyn FnMut() -> bool + 'static>>,
 }
 
 /// Una superficie de fondo en una salida concreta.
@@ -289,6 +300,8 @@ impl BackgroundWindow {
                 last_pause: Vec::new(),
                 pause: pause::SessionPauseWatcher::new(),
                 last_global_pause: false,
+                hup: hup::HupChannel::install().ok(),
+                on_hup: None,
             },
         })
     }
@@ -298,6 +311,13 @@ impl BackgroundWindow {
     /// del arranque nazcan ya con su renderer.
     pub fn set_renderer_factory(&mut self, factory: SurfaceRendererFactory) {
         self.state.factory = Some(factory);
+    }
+
+    /// Registra el handler de recarga de config (SIGHUP): se invoca en
+    /// el hilo del bucle; devolver `true` reconstituye los renderers vía
+    /// factory y repinta. Sin handler, SIGHUP solo despierta el bucle.
+    pub fn on_config_reload(&mut self, f: Box<dyn FnMut() -> bool + 'static>) {
+        self.state.on_hup = Some(f);
     }
 
     /// Instala UN renderer compartido por todas las salidas... no se puede:
@@ -384,6 +404,25 @@ impl BackgroundWindow {
         Ok(reports)
     }
 
+    /// Reconstituye el renderer/color de cada salida vía factory y las
+    /// repinta (recarga de config en caliente): la factory decide por
+    /// salida; si falla, esa salida cae a su color de fallback.
+    pub fn reload_renderers(&mut self) {
+        let conn = self.conn.clone();
+        for idx in 0..self.state.outputs.len() {
+            let Some(output) = self.state.outputs[idx].output.clone() else {
+                continue;
+            };
+            let layer = self.state.outputs[idx].layer.clone();
+            let (renderer, fallback_color) = self.state.build_renderer(&conn, &layer, &output);
+            self.state.outputs[idx].renderer = renderer;
+            self.state.outputs[idx].fallback_color = fallback_color;
+            // Repinta YA (config estática: sin frame callback el píxel
+            // no cambiaría hasta el próximo configure/evento).
+            self.state.draw_entry(idx);
+        }
+    }
+
     /// Ejecuta el bucle de eventos hasta que el compositor cierre el
     /// fondo. Ctrl-C termina el proceso (comportamiento por defecto).
     ///
@@ -391,8 +430,10 @@ impl BackgroundWindow {
     /// callbacks...); entre eventos, `blocking_dispatch` duerme sin girar
     /// la CPU.
     pub fn run(&mut self) -> Result<(), PlatformError> {
+        // Bucle estático: espera indefinida (el canal SIGHUP despierta
+        // el poll para la recarga de config).
         while !self.state.closed {
-            self.event_queue.blocking_dispatch(&mut self.state)?;
+            self.wait_and_dispatch(None)?;
         }
         Ok(())
     }
@@ -540,10 +581,16 @@ impl BackgroundWindow {
 
         if let Some(guard) = self.event_queue.prepare_read() {
             // El handle Backend es un Arc barato; el BorrowedFd presta de
-            // él, así que el handle vive en este bloque.
+            // él, así que el handle vive en este bloque. El eventfd del
+            // canal SIGHUP se añade si existe: su poll_fd es válido
+            // mientras el canal viva (campo del propio estado).
             let backend = self.conn.backend();
             let fd = backend.poll_fd();
-            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+            let mut fds: Vec<PollFd<'_>> = vec![PollFd::new(&fd, PollFlags::IN)];
+            let hup_borrow = self.state.hup.as_ref().map(|c| c.poll_fd());
+            if let Some(h) = &hup_borrow {
+                fds.push(PollFd::new(h, PollFlags::IN));
+            }
             match poll(&mut fds, wait.as_ref()) {
                 // ready == 0: venció el timeout (toque de animación).
                 // ready > 0: llegaron datos; se leen y despachan abajo.
@@ -551,6 +598,14 @@ impl BackgroundWindow {
                 // EINTR (señales como SIGINT): no es un error para el bucle.
                 Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(PlatformError::Poll(e.to_string())),
+            }
+            // SIGHUP: drenar y, si el callback cambió el modelo de
+            // fuentes, reconstituir renderers y repintar.
+            if let Some(channel) = self.state.hup.as_ref()
+                && channel.drain()
+                && self.state.on_hup.as_mut().is_some_and(|f| f())
+            {
+                self.reload_renderers();
             }
             // `read` consume el guard; si devolvió 0 eventos (p. ej. solo
             // EINTR), el dispatch_pending de abajo no tendrá nada nuevo.

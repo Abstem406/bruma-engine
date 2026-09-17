@@ -696,17 +696,31 @@ fn run_command(args: &[String]) {
     let notify_state: std::rc::Rc<std::cell::RefCell<Option<(String, std::time::Instant)>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
 
-    let por_salida_f = por_salida;
-    let default_f = default_fuente;
+    // Modelo de fuentes COMPARTIDO (Fase 5): la factory lo lee en cada
+    // construcción de renderer (arranque y recargas); el handler de
+    // SIGHUP lo actualiza. Rc<RefCell> porque ambos viven en el hilo del
+    // bucle (sin cruces de hilos, sin Mutex).
+    struct ModeloFuentes {
+        por_salida: Vec<(String, Fuente)>,
+        default: Fuente,
+    }
+    let modelo_fuentes: std::rc::Rc<std::cell::RefCell<ModeloFuentes>> =
+        std::rc::Rc::new(std::cell::RefCell::new(ModeloFuentes {
+            por_salida,
+            default: default_fuente,
+        }));
+
+    let modelo_f = modelo_fuentes.clone();
     let notifier_f = notifier.clone();
     let notify_state_f = notify_state.clone();
     window.set_renderer_factory(Box::new(move |handles| {
+        let m = modelo_f.borrow();
         let fuente = handles
             .output_name
             .as_deref()
-            .and_then(|n| por_salida_f.iter().find(|(name, _)| name == n))
+            .and_then(|n| m.por_salida.iter().find(|(name, _)| name == n))
             .map(|(_, f)| f)
-            .unwrap_or(&default_f);
+            .unwrap_or(&m.default);
         let display = handles.display_ptr;
         let surface = handles.surface_ptr;
         match fuente {
@@ -790,6 +804,45 @@ fn run_command(args: &[String]) {
             r.width,
             r.height
         );
+    }
+
+    // Recarga de config en caliente: SIGHUP → re-parsear y actualizar el
+    // modelo de fuentes (la plataforma reconstituye los renderers vía
+    // factory y repinta). Alcance: fuentes y params por salida; un cambio
+    // de fps espera al próximo arranque (el runtime no se muta en caliente).
+    if cfg.is_some() {
+        let notifier_h = notifier.clone();
+        let modelo_h = modelo_fuentes.clone();
+        window.on_config_reload(Box::new(move || {
+            let cfg_new = match config::Config::load() {
+                // Sin config o rota: el wallpaper SIGUE con la actual.
+                Ok(Some(c)) => c,
+                Ok(None) => return false,
+                Err(e) => {
+                    log::warn!("config rechazada: {e}");
+                    notifier_h.shader_rejected(&format!("config: {e}"));
+                    return false;
+                }
+            };
+            let mut pkg_cache = Default::default();
+            let mut manifest_fps = None;
+            let mut params = Vec::new();
+            let mut m = modelo_h.borrow_mut();
+            if let Some(d) = &cfg_new.default {
+                m.default = resolver_fuente(d, &[], &mut pkg_cache, &mut params, &mut manifest_fps);
+            }
+            m.por_salida = cfg_new
+                .outputs
+                .iter()
+                .map(|(name, oc)| {
+                    (
+                        name.clone(),
+                        resolver_fuente(oc, &[], &mut pkg_cache, &mut params, &mut manifest_fps),
+                    )
+                })
+                .collect();
+            true
+        }));
     }
 
     // El modo del bucle lo decide el renderer instalado: animado (shader)
