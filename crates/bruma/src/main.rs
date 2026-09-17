@@ -10,6 +10,7 @@ use bruma_core::Color;
 use std::time::Duration;
 
 mod config;
+mod new;
 
 fn main() {
     // Minimal logging with no dependencies; when the project needs more, a
@@ -25,6 +26,7 @@ fn main() {
         Some("install") => install_command(&args.collect::<Vec<_>>()),
         Some("list") => list_command(),
         Some("pack") => pack_command(&args.collect::<Vec<_>>()),
+        Some("new") => new_command(&args.collect::<Vec<_>>()),
         Some("config") => config_command(&args.collect::<Vec<_>>()),
         Some("service") => service_command(&args.collect::<Vec<_>>()),
         Some("--version") | Some("-V") | None => {
@@ -34,13 +36,14 @@ fn main() {
             );
             if std::env::args().count() == 1 {
                 eprintln!(
-                    "\nUsage: bruma <COMMAND>\n\nCommands:\n  run [options] [color]    Background behind the windows (no flags: uses the config)\n  validate PACKAGE         Validates a .wallpaper file\n  install PACKAGE          Installs a package\n  list                     Lists installed packages\n  pack DIRECTORY           Packs a directory into .wallpaper\n  config init|show         Creates/shows the persistent config\n  service install|remove   Starts with the session (user service)"
+                    "\nUsage: bruma <COMMAND>\n\nCommands:\n  run [options] [color]    Background behind the windows (no flags: uses the config)\n  validate PACKAGE         Validates a .wallpaper file\n  install PACKAGE          Installs a package\n  list                     Lists installed packages\n  pack DIRECTORY           Packs a directory into .wallpaper\n  new NAME [--template T]  Scaffolds a wallpaper package (templates: {} )\n  config init|show         Creates/shows the persistent config\n  service install|remove   Starts with the session (user service)",
+                    new::template_list()
                 );
             }
         }
         Some(other) => {
             eprintln!(
-                "unknown command: {other}\n\nAvailable commands:\n  run | validate | install | list | pack | config | service"
+                "unknown command: {other}\n\nAvailable commands:\n  run | validate | install | list | pack | new | config | service"
             );
             std::process::exit(2);
         }
@@ -165,6 +168,74 @@ fn pack_command(args: &[String]) {
     }
     match bruma_package::Store::pack(std::path::Path::new(dir), out.as_deref()) {
         Ok(p) => println!("✔ packed into {}", p.display()),
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn new_command(args: &[String]) {
+    let Some(name) = args.first() else {
+        eprintln!(
+            "usage: bruma new NAME [--template waves|fog|water] [--dir PATH]\n  NAME is also the package title; rename it later in wallpaper.json"
+        );
+        std::process::exit(2);
+    };
+    let mut template = "waves";
+    let mut dir: Option<std::path::PathBuf> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--template" | "-t" => {
+                i += 1;
+                template = args.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
+                    eprintln!("--template requires a name ({})", new::template_list());
+                    std::process::exit(2);
+                });
+            }
+            "--dir" => {
+                i += 1;
+                dir = Some(std::path::PathBuf::from(
+                    args.get(i)
+                        .unwrap_or_else(|| {
+                            eprintln!("--dir requires a path");
+                            std::process::exit(2);
+                        })
+                        .clone(),
+                ));
+            }
+            other => {
+                eprintln!("unknown argument: {other}");
+                std::process::exit(2);
+            }
+        }
+        i += 1;
+    }
+    match new::create(name, template, dir.as_deref()) {
+        Ok(files) => {
+            println!(
+                "✔ wallpaper '{name}' scaffolded (template: {template}) in {}",
+                files[0]
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .display()
+            );
+            println!("  next steps:");
+            println!(
+                "    1. edit {} with your editor (hot-reload shows it live)",
+                files[1].display()
+            );
+            println!(
+                "    2. bruma pack {}/            → {}.wallpaper",
+                name, name
+            );
+            println!(
+                "    3. bruma validate {}.wallpaper && bruma install {}.wallpaper",
+                name, name
+            );
+            println!("    4. bruma run --package {}", name);
+        }
         Err(e) => {
             eprintln!("error: {e}");
             std::process::exit(1);

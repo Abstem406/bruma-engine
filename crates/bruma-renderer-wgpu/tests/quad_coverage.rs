@@ -235,8 +235,8 @@ fn offline_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     Some((device, queue))
 }
 
-/// Uniform block (48 bytes) and bind group with the SAME shape as the
-/// animated renderer: time, params0, mouse, params, res, pad.
+/// Uniform block (64 bytes) and bind group with the SAME shape as the
+/// animated renderer: time, params0, mouse, params, res, clock, pad.
 fn make_uniforms(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -249,9 +249,10 @@ fn make_uniforms(
         mouse: [f32; 2],
         params: [f32; 4],
         res: [f32; 2],
-        pad: [f32; 2],
+        clock: [f32; 3],
+        pad: [f32; 3],
     }
-    const _: () = assert!(std::mem::size_of::<U>() == 48);
+    const _: () = assert!(std::mem::size_of::<U>() == 64);
 
     let block = U {
         time: 0.0,
@@ -259,20 +260,21 @@ fn make_uniforms(
         mouse: [-1.0, -1.0],
         params: [0.9, 0.0, 0.0, 0.0],
         res: [W as f32, H as f32],
-        pad: [0.0, 0.0],
+        clock: [12.0, 30.0, 0.0],
+        pad: [0.0; 3],
     };
 
     let buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("test-uniforms"),
-        size: 48,
+        size: 64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     queue.write_buffer(
         &buf,
         0,
-        // SAFETY: repr(C) of plain f32s, 48 bytes verified at compile time.
-        unsafe { std::slice::from_raw_parts(&block as *const U as *const u8, 48) },
+        // SAFETY: repr(C) of plain f32s, 64 bytes verified at compile time.
+        unsafe { std::slice::from_raw_parts(&block as *const U as *const u8, 64) },
     );
 
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -283,7 +285,7 @@ fn make_uniforms(
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(48),
+                min_binding_size: wgpu::BufferSize::new(64),
             },
             count: None,
         }],

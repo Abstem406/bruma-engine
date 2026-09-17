@@ -39,6 +39,10 @@ pub struct FrameState {
     /// [`WallpaperRuntime::params`] carry the names; the GPU only sees
     /// numbers.
     pub params: [f32; 4],
+    /// Real-time clock for shaders (`u_clock`): `[hours, minutes,
+    /// seconds]` of the local day, supplied by the platform on every
+    /// animated frame. `[0, 0, 0]` when no provider is installed.
+    pub clock: [f32; 3],
 }
 
 impl Default for FrameState {
@@ -51,6 +55,7 @@ impl Default for FrameState {
             mouse_x: -1.0,
             mouse_y: -1.0,
             params: [0.0; 4],
+            clock: [0.0; 3],
         }
     }
 }

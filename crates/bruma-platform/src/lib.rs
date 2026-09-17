@@ -27,6 +27,7 @@
 // with a targeted allow and the rest of the crate keeps it that way.
 #![deny(unsafe_code)]
 
+mod clock;
 mod hup;
 mod notify;
 mod pause;
@@ -529,6 +530,11 @@ impl BackgroundWindow {
                         }
                         st.width = w;
                         st.height = h;
+                        // Real-time clock for shaders (day/night tints,
+                        // clock wallpapers). Fresh on every animated
+                        // frame; one libc call, negligible next to the
+                        // render.
+                        st.clock = clock::local_hms();
                         let fullscreened = self.state.outputs[idx]
                             .output
                             .as_ref()

@@ -19,3 +19,8 @@ log = "0.4.34"
 # para el manifiesto — cero dependencias nuevas (D8).
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+
+[dev-dependencies]
+# Template validation in tests: same WGSL compiler/validator the engine
+# runs (naga rides in the tree via wgpu — no new code, D8).
+naga = { version = "30.0.1", features = ["wgsl-in"] }

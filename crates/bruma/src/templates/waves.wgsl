@@ -1,8 +1,13 @@
-// Demo animated wallpaper — Phase 3.
+// Concentric waves — template.
 //
-// Concentric waves expanding from the center with a Nord-ish gradient.
-// Everything time-dependent arrives via uniforms, so the file is ready
-// for hot-reload: edit and save is enough, no wallpaper restart needed.
+// Damped sine waves expanding from the center over a Nord palette.
+// The simplest "alive" shader there is: two parameters, no textures.
+// The u_clock uniform is declared but unused here — it exists for
+// day/night variants (see the fog template).
+//
+// Parameters (rename freely in wallpaper.json):
+//   speed — wave pace (default 0.5)
+//   glow  — brightness of the wave crests (default 0.3)
 //
 // Uniforms (binding 0, 64 bytes):
 //   u_time    f32  — seconds since startup
@@ -10,7 +15,7 @@
 //   u_mouse   vec2 — cursor position (px; -1,-1 = unknown)
 //   u_params  vec4 — flat parameters 0..3 (names in the manifest)
 //   u_res     vec2 — buffer resolution (px)
-//   u_clock   vec3 — local wall clock [h, m, s] (day/night tints, clocks)
+//   u_clock   vec3 — local wall clock [h, m, s]
 
 struct Uniforms {
     u_time: f32,
@@ -51,11 +56,12 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
     return out;
 }
 
-// Damped waves: sin(t*k - r*speed) * exp(-r*decay)
+// Damped waves: sin(t*pace - r*k) * exp(-r*decay)
 fn waves(uv: vec2<f32>, t: f32) -> f32 {
     let p = uv * U.u_res;
     let r = length(p) / 200.0;
-    return sin(t * 1.4 - r * 4.5) * exp(-r * 0.10);
+    let pace = 0.6 + 1.6 * U.u_params.x;
+    return sin(t * pace - r * 4.5) * exp(-r * 0.10);
 }
 
 @fragment
@@ -68,9 +74,8 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     let w = waves(uv, U.u_time);
     var col = mix(base, wine, 0.5 + 0.5 * w);
 
-    // u_params0 shifts brightness; animatable with:
-    //   bruma run --shader hello.wgsl --fps 30 --param param0=0.5
-    col += U.u_params0 * 0.15 * w;
+    // u_params.y ("glow") brightens the crests only.
+    col += U.u_params.y * 0.3 * max(w, 0.0);
 
     return vec4<f32>(col, 1.0);
 }

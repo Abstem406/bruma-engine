@@ -62,7 +62,7 @@ pub enum RendererError {
     ShaderCompile(String),
 }
 
-/// Uniform block of the animated shader (48 bytes, no padding).
+/// Uniform block of the animated shader (64 bytes, no padding).
 ///
 /// GPU layout (same as `Uniforms` in the shaders):
 /// ```text
@@ -71,8 +71,9 @@ pub enum RendererError {
 /// offset 8:  u_mouse   vec2f
 /// offset 16: u_params  vec4f (u_params0..3)
 /// offset 32: u_res     vec2f
-/// offset 40: (end padding: WGSL rounds a uniform struct's size up to a
-///             multiple of 16 → 48 bytes)
+/// offset 40: u_clock   vec3f (local h/m/s for day/night and clocks)
+/// offset 52: (end padding: WGSL rounds a uniform struct's size up to a
+///             multiple of 16 → 64 bytes)
 /// ```
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -82,7 +83,8 @@ struct Uniforms {
     mouse: [f32; 2],
     params: [f32; 4],
     res: [f32; 2],
-    _pad_end: [f32; 2],
+    clock: [f32; 3],
+    _pad_end: [f32; 3],
 }
 
 // The block is uploaded to the GPU as raw bytes: padding-free by
@@ -92,7 +94,7 @@ const _: () = assert!(size_of::<Uniforms>() as u64 == UNIFORM_SIZE);
 impl Uniforms {
     /// Byte view of the block (for `Queue::write_buffer`).
     fn as_bytes(&self) -> &[u8] {
-        // SAFETY: `Uniforms` is a #[repr(C)] of plain f32s (48 bytes
+        // SAFETY: `Uniforms` is a #[repr(C)] of plain f32s (64 bytes
         // without padding, verified above) and the resulting slice is
         // only read.
         unsafe { std::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
@@ -100,7 +102,7 @@ impl Uniforms {
 }
 
 /// Layout constant shared between platform and runtime.
-const UNIFORM_SIZE: u64 = 48;
+const UNIFORM_SIZE: u64 = 64;
 
 /// Builds the quad pipeline (`TriangleStrip` topology, `REPLACE` blend,
 /// vertices generated in the WGSL) for an already compiled module and its
@@ -1085,7 +1087,8 @@ impl FrameRenderer for AnimatedRenderer {
             mouse: [state.mouse_x, state.mouse_y],
             params,
             res: [state.width as f32, state.height as f32],
-            _pad_end: [0.0; 2],
+            clock: state.clock,
+            _pad_end: [0.0; 3],
         };
         self.ctx
             .queue()
