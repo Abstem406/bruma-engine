@@ -111,8 +111,16 @@
   volver). Sin protocolo, degrada a "nunca pausar". Medido en niri:
   43→~4 ticks CPU/8-10s al pausar (por salida), ~1 tick con ambas
   pausadas, reanudación sin salto. `maximized` NO pausa (política D12).
+- ✅ Pausa global: bloqueo de sesión (logind `Lock`/`Unlock` +
+  `LockedHint` de respaldo) y batería (UPower `State==2`), vía D-Bus de
+  sistema, best-effort (sin bus → nunca pausa). Sesión gráfica
+  localizada con `ListSessions`+`Type=wayland` (GetSessionByPID
+  inservible: compositors corren como servicios de usuario) y paths
+  escapados (`_34`) usados tal cual. Medido: 35→1-2 ticks CPU/8s con la
+  máquina en batería; lock/unlock verificado con transiciones en el
+  log. Drenaje de señales sin hilos: `process(ZERO)` acotado por frame.
 - Pendiente en la fase: DPI/escala por salida, wallpaper distinto por
-  pantalla, config persistente, pausa en bloqueo/batería.
+  pantalla, config persistente.
 - Compatibilidad verificada: niri (referencia), Hyprland, sway, KWin.
 - GNOME/Mutter sigue siendo non-goal en v1.
 

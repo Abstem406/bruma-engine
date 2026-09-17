@@ -87,3 +87,30 @@ defecto (privacidad) cuando llegue.
   la capa gráfica no conoce D-Bus y la futura UI (Fase 6) podrá
   consumir los mismos eventos.
 - Urgencia "normal" siempre: los avisos de bruma nunca son críticos.
+
+## D12 — Pausas del motor: fullscreen por salida, bloqueo y batería globales
+- Qué: el motor deja de repintar cuando el fondo no se ve o no vale la
+  GPU/batería gastarlo. Tres fuentes, dos alcances:
+  - **Por salida**: ventana fullscreen sobre esa salida (protocolo
+    `wlr-foreign-toplevel-management`). `maximized` NO pausa: en varios
+    compositors no cubre el fondo y sería pausar algo visible.
+  - **Global**: sesión bloqueada (logind: señales `Lock`/`Unlock` +
+    `LockedHint` como segunda fuente) y en batería (UPower
+    `DisplayDevice.State == 2`). Pausan TODAS las salidas.
+- Política: **best-effort estricto** (mismo espíritu que D11). Sin bus
+  de sistema o sin logind/UPower, esa fuente degrada a "nunca pausa";
+  el motor no cambia. El runtime NUNCA se pausa: el tiempo global sigue
+  y al despausar la animación retoma sin salto.
+- Descubrimiento clave (verificado en el sistema, no en memoria):
+  logind ESCAPA los IDs en los object paths (sesión "4" →
+  `/org/freedesktop/login1/session/_34`) y las señales se emiten por el
+  path escapado. Además `GetSessionByPID` es inservible para esto: los
+  compositors Wayland corren como servicios de usuario, fuera del
+  alcance de sesión de logind. Sesión gráfica correcta:
+  `ListSessions` + `Type="wayland"`.
+- Drenaje de señales sin hilos: `SyncConnection::process(Duration::ZERO)`
+  con cota de 32 iteraciones por frame (ráfagas absorbidAs, spin
+  imposible); el watcher vive en el hilo del bucle de frames.
+- Verificación por CPU (ticks de /proc), no por capturas: el fullscreen
+  y las ventanas cambian la imagen; la CPU del proceso es la señal
+  limpia. 35 ticks/8s → 1-2 ticks/8s al pausar; reanudación exacta.

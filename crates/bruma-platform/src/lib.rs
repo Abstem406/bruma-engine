@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 mod notify;
+mod pause;
 mod toplevel;
 
 pub use notify::DesktopNotifier;
@@ -101,6 +102,11 @@ struct BackgroundState {
     /// Último estado de pausa por salida (índice del Vec outputs): para
     /// loggear solo transiciones, no cada frame.
     last_pause: Vec<bool>,
+    /// Pausa global (D12): bloqueo de sesión y batería, best-effort vía
+    /// D-Bus de sistema. Sin bus, nunca pausa.
+    pause: pause::SessionPauseWatcher,
+    /// Último estado de la pausa global, para log de transiciones.
+    last_global_pause: bool,
 }
 
 /// Una superficie de fondo en una salida concreta.
@@ -239,6 +245,8 @@ impl BackgroundWindow {
                 toplevel: toplevel::ToplevelTracker::disabled(),
                 _toplevel_manager: toplevel_mgr,
                 last_pause: Vec::new(),
+                pause: pause::SessionPauseWatcher::new(),
+                last_global_pause: false,
             },
         })
     }
@@ -359,6 +367,22 @@ impl BackgroundWindow {
         runtime: &mut dyn WallpaperRuntime,
     ) -> Result<(), PlatformError> {
         while !self.state.closed {
+            // Pausa global (D12): drena señales de bloqueo/batería y,
+            // si hay alguna, no se repinta NINGUNA salida (el fondo está
+            // tapado por la pantalla de bloqueo, o ahorramos batería).
+            // Igual que el fullscreen: el runtime NO se pausa — el
+            // tiempo global sigue y al despausar retoma sin salto.
+            self.state.pause.poll();
+            let global_pause = self.state.pause.paused();
+            if global_pause != self.state.last_global_pause {
+                log::info!(
+                    "pausa global {}: el motor {} repintar (bloqueo/batería)",
+                    if global_pause { "ON" } else { "OFF" },
+                    if global_pause { "deja de" } else { "vuelve a" }
+                );
+                self.state.last_global_pause = global_pause;
+            }
+
             // Deadline del despertar: SIEMPRE acotado. Tras dibujar, el
             // segundo begin_frame devuelve Skip con el deadline del
             // próximo tick (no toca el tiempo: now-last < interval).
@@ -382,7 +406,13 @@ impl BackgroundWindow {
                     // global sigue corriendo y al salir del fullscreen
                     // la animación retoma por donde iba (sin salto).
                     let mut st = runtime.state();
+                    // Pausa global activa: no se repinta NINGUNA salida
+                    // (el último buffer queda en pantalla a cargo del
+                    // compositor, como en el fullscreen por salida).
                     for idx in 0..self.state.outputs.len() {
+                        if global_pause {
+                            break;
+                        }
                         let (w, h) = (
                             self.state.outputs[idx].width,
                             self.state.outputs[idx].height,

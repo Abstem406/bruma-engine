@@ -409,3 +409,39 @@ log). Lección repetida: antes de cazar bugs, loguear la verdad del
 sistema y leerla completa.
 
 **Pendiente del criterio original:** bloqueo de sesión y batería.
+
+## 2026-09-16 — Pausa global: bloqueo de sesión y batería (D12, parte 2)
+
+**Qué:** `SessionPauseWatcher` (módulo `pause.rs`): D-Bus de sistema,
+sin hilos. logind (señales `Lock`/`Unlock` + `LockedHint` vía
+`PropertiesChanged` como segunda fuente) y UPower (`DisplayDevice.State
+== 2`). El bucle llama `poll()` (drenaje `process(ZERO)` con cota de 32)
+y consulta `paused()` cada frame; con pausa, ninguna salida repinta.
+
+**Dos descubrimientos que solo el sistema real enseñaba:**
+1. `GetSessionByPID` responde `NoSessionForPID` para cualquier PID: los
+   compositors Wayland corren como servicios de usuario (systemd
+   --user), fuera del alcance de sesión de logind. Camino correcto:
+   `ListSessions` + filtrar `Type="wayland"`.
+2. logind escapa los IDs en object paths: la sesión "4" vive en
+   `/org/freedesktop/login1/session/_34` y las señales se emiten por el
+   path ESCAPADO. Mi primer match por `/session/4` (sacado del método
+   roto) nunca recibió nada. Cazado con dbus-monitor: las señales
+   estaban ahí todo el tiempo, en otro path.
+
+**Verificado en vivo:**
+- Arranque en batería → pausa global ON desde el primer frame
+  (estado inicial sincrónico, no espera primera señal): 35 → 1-2
+  ticks/8s. El fondo de la demo quedó congelado un rato: era tu laptop
+  sin cargador, no un bug.
+- `loginctl lock-session` → doble transición registrada (Lock +
+  LockedHint); unlock → desbloqueada por ambas fuentes.
+- Degradación: sin bus de sistema o sin sesión wayland, la fuente
+  desaparece con log y el motor nunca pausa (mismo contrato que D11).
+
+**Tests:** 4 nuevos en pause.rs (semántica de flags, State==2, extracción
+pura de Variant bool/u32/String, watcher disabled). Total workspace: 33.
+
+**Nota de diseño:** el estado inicial se consulta sincrónico (Get) y las
+señales solo avisan de cambios; suscribirse solo si el Get respondió (si
+logind no habla, no insistimos).
