@@ -549,12 +549,14 @@ impl BackgroundWindow {
                         // render.
                         st.clock = clock::local_hms();
                         // Pointer position (Phase 6 `mouse` permission):
-                        // logical coordinates while it hovers one of our
-                        // surfaces; (-1, -1) = unknown otherwise.
+                        // BUFFER pixel coordinates (logical position ×
+                        // output scale — the same space u_res speaks),
+                        // while the cursor hovers one of our surfaces;
+                        // (-1, -1) = unknown otherwise.
                         match self.state.mouse {
                             Some((mx, my)) => {
-                                st.mouse_x = mx as f32;
-                                st.mouse_y = my as f32;
+                                st.mouse_x = (mx * self.state.outputs[idx].scale as f64) as f32;
+                                st.mouse_y = (my * self.state.outputs[idx].scale as f64) as f32;
                             }
                             None => {
                                 st.mouse_x = -1.0;

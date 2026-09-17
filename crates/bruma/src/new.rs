@@ -42,6 +42,18 @@ const TEMPLATES: &[Template] = &[
         params: &[("waves", "Waves", 0.4), ("speed", "Speed", 0.5)],
     },
     Template {
+        name: "water-cursor",
+        source: include_str!("templates/water-cursor.wgsl"),
+        assets: &[(
+            "assets/water-cursor.jpg",
+            include_bytes!("templates/assets/water-cursor.jpg"),
+        )],
+        params: &[
+            ("intensity", "Intensity", 0.6),
+            ("damping", "Damping", 0.35),
+        ],
+    },
+    Template {
         name: "trail",
         source: include_str!("templates/trail.wgsl"),
         assets: &[],
@@ -91,10 +103,12 @@ const PREVIEW_PNG: &[u8] = &[
 fn manifest_json(title: &str, template: &str) -> Option<String> {
     let tpl = TEMPLATES.iter().find(|t| t.name == template)?;
     // Capabilities the template needs: plain shaders only read params;
-    // trail needs the previous frame; parallax reacts to the pointer.
+    // trail needs the previous frame; parallax reacts to the pointer;
+    // water-cursor is a simulation over the pointer's wake.
     let permissions = match template {
         "trail" => "\"params\", \"feedback\"",
         "parallax" => "\"params\", \"mouse\"",
+        "water-cursor" => "\"params\", \"feedback\", \"mouse\"",
         _ => "\"params\"",
     };
     let mut json = format!(
@@ -257,6 +271,6 @@ mod tests {
     fn unknown_template_lists_available() {
         let err = create("x", "vortice", None).unwrap_err();
         assert!(err.contains("unknown template"));
-        assert!(err.contains("waves, fog, water, water-photo, trail, parallax"));
+        assert!(err.contains("waves, fog, water, water-photo, water-cursor, trail, parallax",));
     }
 }

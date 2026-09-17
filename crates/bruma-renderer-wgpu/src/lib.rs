@@ -182,10 +182,53 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Appended to the CREATOR's shader source to build the display blit: a
+/// WGSL module is one compilation unit, so the only way for the blit to
+/// call the creator's `display(uv, frame, u)` (and see its `U` uniform
+/// block and group-1 `prev_tex`/`prev_samp`) is to compile the combined
+/// source. Adds its own vertex entry with bruma-prefixed names so it
+/// cannot collide with the creator's declarations. If the combined
+/// module fails to compile, the engine falls back to the plain copy
+/// blit (standalone, always valid).
+pub const BLIT_DISPLAY_APPEND: &str = r#"
+struct BrumaDisplayOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn bruma_display_vs(@builtin(vertex_index) idx: u32) -> BrumaDisplayOut {
+    let positions = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0,  1.0),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+    );
+    let uvs = array<vec2<f32>, 4>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+    );
+    var out: BrumaDisplayOut;
+    out.position = vec4<f32>(positions[idx], 0.0, 1.0);
+    out.uv = uvs[idx];
+    return out;
+}
+
+@fragment
+fn fs_display(in: BrumaDisplayOut) -> @location(0) vec4<f32> {
+    return display(in.uv, textureSample(prev_tex, prev_samp, in.uv), U);
+}
+"#;
+
 /// Builds the quad pipeline (`TriangleStrip` topology, `REPLACE` blend,
 /// vertices generated in the WGSL) for an already compiled module and its
 /// bind group layouts: group 0 (uniforms + textures), group 1 (previous
 /// frame; unused by shaders without the `feedback` permission).
+///
+/// `fragment_entry` selects the fragment entry point ("fs_main", or
+/// "fs_display" for the internal display blit).
 ///
 /// Pure with respect to surfaces: it only knows the device and the target
 /// format. So [`crate::AnimatedRenderer`] and the coverage tests use the
@@ -202,6 +245,27 @@ pub fn build_quad_pipeline(
     module: &wgpu::ShaderModule,
     bind_group_layout: &wgpu::BindGroupLayout,
     prev_frame_layout: Option<&wgpu::BindGroupLayout>,
+) -> wgpu::RenderPipeline {
+    build_quad_pipeline_entry(
+        device,
+        format,
+        module,
+        bind_group_layout,
+        prev_frame_layout,
+        "fs_main",
+    )
+}
+
+/// [`build_quad_pipeline`] with an explicit fragment entry point (the
+/// internal display blit uses `fs_display`).
+#[allow(clippy::too_many_arguments)]
+pub fn build_quad_pipeline_entry(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    module: &wgpu::ShaderModule,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    prev_frame_layout: Option<&wgpu::BindGroupLayout>,
+    fragment_entry: &str,
 ) -> wgpu::RenderPipeline {
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("bruma-quad-layout"),
@@ -220,7 +284,7 @@ pub fn build_quad_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -278,8 +342,7 @@ impl GpuShared {
             memory_hints: wgpu::MemoryHints::default(),
             trace: wgpu::Trace::Off,
         }))
-        .map_err(|e| RendererError::Device(e.to_string()))?;
-        // Uncaptured validation errors are logged, not fatal: a broken
+        .map_err(|e| RendererError::Device(e.to_string()))?; // Uncaptured validation errors are logged, not fatal: a broken
         // frame must not take the daemon down (same philosophy as shader
         // hot-reload). Without this handler wgpu panics on first error.
         device.on_uncaptured_error(Arc::new(move |error| {
@@ -891,6 +954,14 @@ pub struct AnimatedRenderer {
     texture_samplers: Vec<wgpu::Sampler>,
     /// Previous-frame input requested (manifest `feedback` permission).
     feedback: bool,
+    /// The creator shader's CURRENT source (re-read on every hot-reload
+    /// and used to compile the display blit, which concatenates the
+    /// creator code + the internal append).
+    creator_source: String,
+    /// The shader declares `fn display(uv, frame, u)` — the feedback blit
+    /// runs it through `fs_display` so the creator controls how the
+    /// offscreen state reaches the screen (water over a photo).
+    display_entry: bool,
     /// Group-1 layout for the previous frame. EVERY pipeline carries it
     /// (created in the constructor): a shader declaring group 1 needs it
     /// from the first pipeline on, and hot-reload can flip between
@@ -1100,6 +1171,8 @@ impl AnimatedRenderer {
             texture_views: initial_views,
             texture_samplers: initial_samplers,
             feedback: false,
+            display_entry: false,
+            creator_source: source.clone(),
             prev_frame_layout,
             ping_pong: None,
         };
@@ -1114,6 +1187,14 @@ impl AnimatedRenderer {
     /// offscreen ping-pong, allocated lazily on the first frame.
     pub fn set_feedback(&mut self) {
         self.feedback = true;
+    }
+
+    /// Declares that the shader renders through a `display(uv, frame, u)`
+    /// entry (creator-owned presentation of the offscreen state, e.g.
+    /// water over a photo). The internal blit then runs `fs_display`.
+    /// Must be called before the first frame.
+    pub fn set_display_entry(&mut self) {
+        self.display_entry = true;
     }
 
     /// Sets THIS output's parameter overrides (Phase 5).
@@ -1275,6 +1356,33 @@ impl AnimatedRenderer {
         ))
     }
 
+    /// Builds the display blit pipeline for a creator shader that
+    /// declares `display(uv, frame, u)`: the creator source gets the
+    /// `bruma_display_*` append (its own vertex entry + the `fs_display`
+    /// fragment that calls into the creator's code). If the combined
+    /// module does not compile, the plain copy blit is used instead —
+    /// the wallpaper never goes black over a broken display entry.
+    fn build_display_blit(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        creator_source: &str,
+        group0_layout: &wgpu::BindGroupLayout,
+        prev_layout: &wgpu::BindGroupLayout,
+    ) -> Option<wgpu::RenderPipeline> {
+        let combined = format!("{creator_source}\n{BLIT_DISPLAY_APPEND}");
+        let Ok(module) = compile_wgsl(device, &combined, "bruma-display-blit") else {
+            return None;
+        };
+        Some(build_quad_pipeline_entry(
+            device,
+            format,
+            &module,
+            group0_layout,
+            Some(prev_layout),
+            "fs_display",
+        ))
+    }
+
     /// Emits an event through the callback if one is installed.
     fn emit(&mut self, event: &ReloadEvent) {
         if let Some(cb) = self.on_reload.as_mut() {
@@ -1300,6 +1408,7 @@ impl AnimatedRenderer {
             log::warn!("hot-reload: could not read {}", self.shader_path.display());
             return;
         };
+        self.creator_source = source.clone();
         match Self::build_pipeline(
             &self.ctx,
             &source,
@@ -1361,6 +1470,8 @@ impl AnimatedRenderer {
                 device,
                 &self.bind_group_layout,
                 &self.prev_frame_layout,
+                self.display_entry,
+                &self.creator_source,
                 width,
                 height,
                 format,
@@ -1454,11 +1565,14 @@ impl AnimatedRenderer {
     /// fields (`pipeline`, `bind_group`) for the render passes while
     /// `pp` stays alive — field-disjoint borrows, impossible through a
     /// whole-`self` method call.
+    #[allow(clippy::too_many_arguments)]
     fn ensure_ping_pong<'a>(
         slot: &'a mut Option<PingPong>,
         device: &wgpu::Device,
         group0_layout: &wgpu::BindGroupLayout,
         prev_layout: &wgpu::BindGroupLayout,
+        display_entry: bool,
+        creator_source: &str,
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
@@ -1533,18 +1647,41 @@ impl AnimatedRenderer {
                 // be a programming error, not a runtime condition.
                 log::error!("feedback: internal blit shader failed to compile");
                 return None;
-            };
-            // The blit shares the creator shader's two-group layout: it
+            }; // The blit shares the creator shader's two-group layout: it
             // declares only group 1 (its source frame), but group 0 must
             // still be present in the pipeline layout (and bound in the
             // pass, even unused).
-            let blit = build_quad_pipeline(
-                device,
-                format,
-                &blit_module,
-                group0_layout,
-                Some(prev_layout),
-            );
+            //
+            // Display mode compiles the CREATOR source + the append so
+            // the blit can call `display(uv, frame, U)`; a combined
+            // module that does not compile falls back to the plain copy
+            // blit (creator display code with a bug = plain presentation,
+            // never a dead wallpaper).
+            let blit = if display_entry {
+                Self::build_display_blit(device, format, creator_source, group0_layout, prev_layout)
+                    .unwrap_or_else(|| {
+                        log::warn!(
+                            "feedback: display entry failed to compile; falling back to plain blit"
+                        );
+                        build_quad_pipeline_entry(
+                            device,
+                            format,
+                            &blit_module,
+                            group0_layout,
+                            Some(prev_layout),
+                            "fs_main",
+                        )
+                    })
+            } else {
+                build_quad_pipeline_entry(
+                    device,
+                    format,
+                    &blit_module,
+                    group0_layout,
+                    Some(prev_layout),
+                    "fs_main",
+                )
+            };
             *slot = Some(PingPong {
                 size: (width, height),
                 _textures: textures,

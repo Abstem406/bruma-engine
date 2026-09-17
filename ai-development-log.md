@@ -712,3 +712,38 @@ iGPU AMD 660M/RADV) y gates verdes (fmt, clippy 0 warnings, 49 tests).
   cover/contain para texturas, asociación MIME del hito drag-and-drop.
 - **Gates finales:** fmt, clippy 0 warnings, 49 tests, `cargo install`
   OK. Evidencia en `demos/fase6/`.
+
+## 2026-09-17 — Agua que sigue al cursor (water-cursor): simulación con entrada de display
+
+- **Efecto:** el "calm water" estilo Wallpaper Engine — el puntero deja
+  ondulaciones sobre una foto fija que se propagan y se calman solas.
+- **Motor:** tercera variante del pase de feedback. El shader del creador
+  puede declarar `fs_main(uv)` como SIMULACIÓN pura (estado offscreen) y
+  `display(uv, frame, u)` como presentación (refracción + brillos sobre
+  la foto). El blit interno compila **el código del creador + un apéndice
+  interno** (`BLIT_DISPLAY_APPEND`) porque un módulo WGSL es una unidad
+  de compilación: `fs_display` necesita ver el `U` del creador y su
+  `display()`. Si el módulo combinado no compila, cae al blit de copia
+  (el fondo nunca muere por un display roto). Matiz de formatos que
+  costó un test: el offscreen usa el MISMO formato sRGB que el
+  swapchain — muestrear sRGB y re-codificar al escribir es un viaje
+  idéntico byte a byte.
+- **Precisión del mouse:** u_mouse pasó de lógico a PÍXELES DE BUFFER
+  (posición × escala de la salida) para que los shaders hablen el mismo
+  idioma que u_res en monitores HiDPI.
+- **Plantilla `water-cursor`:** campo de alturas en frame.r alrededor de
+  0.5; relajación hacia el vecindario (propagación) + amortiguación;
+  gota Gaussiana donde está el cursor; display = refracción del lookup
+  de la foto + glints especulares. Foto de la demo: **wallhaven yqxzqx**
+  (API v1, búsqueda SFW con `+lake +mountain`, 5120×2880 → recortada a
+  1920×1200/375 KB — límites del paquete 32 MB/96 MB sobran).
+- **Test offline de la ruta completa** (`tests/display_blit.rs`, GPU
+  real, saltos sin adaptador): (1) la pantalla NO es el estado crudo
+  (display() fue llamado: la foto tiene varianza de color, el estado es
+  gris plano); (2) la gota del cursor inyecta energía (la salida sim
+  cambia con u_mouse en el centro). La primera aserción de "píxel ==
+  foto" murió por el doble sRGB/lineal: el screenshot en vivo está
+  contaminado por las ventanas del escritorio — la lección de las Fases
+  2-5 otra vez: verificar con render offline, no con capturas.
+- **Gates:** fmt, clippy 0 warnings, 50 tests, cargo install OK.
+  Demo en vivo: 0 errores, puntero vinculado, ambas salidas activas.

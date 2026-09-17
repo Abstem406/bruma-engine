@@ -819,6 +819,14 @@ fn run_command(args: &[String]) {
                 // (manifest `feedback` permission).
                 if *feedback {
                     renderer.set_feedback();
+                    // A `display(uv, frame, u)` entry means the shader
+                    // controls how the offscreen state reaches the screen
+                    // (e.g. water over a photo): the blit runs fs_display.
+                    if let Ok(src) = std::fs::read_to_string(path)
+                        && src.contains("fn display(")
+                    {
+                        renderer.set_display_entry();
+                    }
                 }
                 // Package textures (manifest `textures` order) go to the
                 // fixed slots before the first frame; empty for loose
