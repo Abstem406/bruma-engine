@@ -95,6 +95,61 @@ impl Uniforms {
 /// Layout de la configuración compartida entre plataforma y runtime.
 const UNIFORM_SIZE: u64 = 48;
 
+/// Construye el pipeline de quad (topología `TriangleStrip`, blending
+/// `REPLACE`, vértices generados en el WGSL) para un módulo ya compilado
+/// y su bind group layout.
+///
+/// Pura respecto de superficies: solo conoce device y formato de destino.
+/// Así [`crate::AnimatedRenderer`] y los tests de cobertura usan el MISMO
+/// código — el test valida el pipeline de producción, no una copia.
+///
+/// Geometría (contrato con los shaders): 4 vértices en orden strip
+/// (TL, TR, BL, BR → triángulos 0-1-2 y 1-2-3); `draw(0..3)` para el demo
+/// de triángulo es idéntico en strip. Historia: con `TriangleList` solo
+/// se dibujaba el primer triángulo — mitad de pantalla sin pintar durante
+/// las Fases 2-4, invisible a las verificaciones que solo medían (5,5).
+pub fn build_quad_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    module: &wgpu::ShaderModule,
+    bind_group_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("bruma-quad-layout"),
+        bind_group_layouts: &[Some(bind_group_layout)],
+        immediate_size: 0,
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("bruma-quad-pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 /// Estado GPU compartido por todos los renderers de esta fase: instancia,
 /// adaptador, dispositivo, cola y la superficie ya asociada al adaptador.
 ///
@@ -590,11 +645,14 @@ impl FrameRenderer for ImageRenderer {
 
 /// Carga y valida un módulo WGSL, devolviendo errores de compilación con
 /// el mensaje de naga (independiente de la feature `fragile-send-sync-non-atomic-wgpu`).
+/// Compila WGSL con validación síncrona de naga y mensajes de error
+/// útiles (línea/columna). Pública para que los tests usen el mismo
+/// camino que la producción.
 ///
 /// La validación es síncrona: se valida el fuente directamente con naga
 /// (la dependencia de compilación de wgpu, ya en el árbol) ANTES de
 /// crear el módulo GPU. Un shader inválido nunca llega a la GPU.
-fn compile_wgsl(
+pub fn compile_wgsl(
     device: &wgpu::Device,
     source: &str,
     label: &str,
@@ -767,48 +825,12 @@ impl AnimatedRenderer {
     ) -> Result<wgpu::RenderPipeline, RendererError> {
         let shader = compile_wgsl(ctx.device(), source, "bruma-anim-shader")?;
 
-        let pipeline_layout =
-            ctx.device()
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("bruma-anim-layout"),
-                    bind_group_layouts: &[Some(bind_group_layout)],
-                    immediate_size: 0,
-                });
-
-        Ok(ctx
-            .device()
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("bruma-anim-pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: ctx.surface_format(),
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                // Los quads de los shaders son 4 vértices en orden strip
-                // (TL, TR, BL, BR → triángulos 0-1-2 y 1-2-3); el demo del
-                // triángulo (draw 0..3) es idéntico en strip. Con list solo
-                // se dibujaba el primer triángulo: mitad de pantalla negra.
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            }))
+        Ok(build_quad_pipeline(
+            ctx.device(),
+            ctx.surface_format(),
+            &shader,
+            bind_group_layout,
+        ))
     }
 
     /// Emite un evento por el callback si hay callback instalado.

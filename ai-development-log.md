@@ -300,3 +300,32 @@ centro, nunca un punto de la región sabida-buena.
 vértices ya estaban en orden strip; `draw(0..3)` del demo no cambia).
 Verificado: 4 esquinas con el shader, centro brillante con
 intensidad=0.9, animación viva entre capturas.
+
+## 2026-09-16 — Test de cobertura de quad (el test del test)
+
+**Motivación:** el bug de la mitad negra sobrevivió dos fases porque la
+verificación en vivo solo medía (5,5). Ahora existe
+`crates/bruma-renderer-wgpu/tests/quad_coverage.rs`: render offline a
+textura (sin Wayland, sin superficie), readback de píxeles y aserciones.
+
+**Diseño — probar producción, no una copia:**
+- `build_quad_pipeline()` extraída a función pura (device + formato +
+  módulo): la usa el AnimatedRenderer y el test por igual.
+- `compile_wgsl()` pública: el test valida con naga por el mismo camino.
+- `hello.wgsl` via `include_str!`: el shader real del binario.
+- El draw es idéntico (`draw(0..4)` sobre el mismo pipeline).
+
+**Aserciones (la geometría como contrato):**
+1. Cobertura: TL/TR/BL/BR/centro (8px hacia adentro) ≠ clear rojo.
+2. Simetría: las 4 esquinas idénticas entre sí (la onda solo depende
+   de r) — delata quad espejado o desplazado.
+3. Contraste: centro ≠ esquinas (con t=0, w centro=0, w esquina≈0.73,
+   determinista) — delata uniforms/uv sin conectar.
+
+**Validación del propio test (mutación):** reintroduje TriangleList
+temporalmente → el test FALLÓ en la aserción de cobertura; restaurado
+→ pasa. Un test que nunca vio el bug no vale nada; este lo vio.
+
+**Sin GPU (CI):** request_adapter sin superficie y skip con aviso —
+mismo contrato best-effort del proyecto: el CI corre en runners sin
+GPU; en dev corre de lleno.
