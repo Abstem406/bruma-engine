@@ -44,6 +44,10 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{
+        Capability, SeatHandler, SeatState,
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+    },
     shell::{
         WaylandSurface,
         wlr_layer::{
@@ -119,6 +123,13 @@ struct BackgroundState {
     /// Config reload callback (installed by the CLI): `true` = there was
     /// a reload and the loop rebuilds renderers and repaints.
     on_hup: Option<Box<dyn FnMut() -> bool + 'static>>,
+    /// Pointer position on the surface it currently hovers (LOGICAL
+    /// coordinates), updated from wl_pointer events. `None` = the cursor
+    /// is not over any of our surfaces (shaders get (-1, -1) = unknown).
+    mouse: Option<(f64, f64)>,
+    /// SCTK seat state: tracks seats and their capabilities; owner of
+    /// the wl_pointer objects (bound on the pointer capability).
+    seat_state: SeatState,
 }
 
 /// A background surface on one concrete output.
@@ -320,6 +331,8 @@ impl BackgroundWindow {
                 last_global_pause: false,
                 hup: hup::HupChannel::install().ok(),
                 on_hup: None,
+                mouse: None,
+                seat_state: SeatState::new(&globals, &qh),
             },
         })
     }
@@ -535,6 +548,19 @@ impl BackgroundWindow {
                         // frame; one libc call, negligible next to the
                         // render.
                         st.clock = clock::local_hms();
+                        // Pointer position (Phase 6 `mouse` permission):
+                        // logical coordinates while it hovers one of our
+                        // surfaces; (-1, -1) = unknown otherwise.
+                        match self.state.mouse {
+                            Some((mx, my)) => {
+                                st.mouse_x = mx as f32;
+                                st.mouse_y = my as f32;
+                            }
+                            None => {
+                                st.mouse_x = -1.0;
+                                st.mouse_y = -1.0;
+                            }
+                        }
                         let fullscreened = self.state.outputs[idx]
                             .output
                             .as_ref()
@@ -1084,7 +1110,88 @@ impl ProvidesRegistryState for BackgroundState {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
+}
+
+// Pointer input (Phase 6 `mouse` permission): seat capability tracking
+// (grab a wl_pointer per seat with the pointer capability) and motion
+// events over our background surfaces. The layer-shell surface does NOT
+// receive the pointer while windows cover it, so the shader sees real
+// coordinates only on empty desktop — the best Wayland can offer a
+// background surface.
+impl SeatHandler for BackgroundState {
+    fn seat_state(&mut self) -> &mut SeatState {
+        // SeatState is stored in the BackgroundState struct (see below).
+        &mut self.seat_state
+    }
+
+    fn new_seat(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wayland_client::protocol::wl_seat::WlSeat,
+    ) {
+    }
+
+    fn remove_seat(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wayland_client::protocol::wl_seat::WlSeat,
+    ) {
+    }
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wayland_client::protocol::wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer
+            && let Ok(_pointer) = self.seat_state().get_pointer(qh, &seat)
+        {
+            // The WlPointer object stays alive as long as the SeatState
+            // hands it out; sctk keeps its own refcount. Motion events
+            // flow into `pointer_frame` from now on.
+            log::info!("pointer capability bound (mouse position available)");
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wayland_client::protocol::wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer {
+            self.mouse = None;
+            log::info!("pointer capability removed");
+        }
+    }
+}
+
+impl PointerHandler for BackgroundState {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wayland_client::protocol::wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            match event.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    self.mouse = Some(event.position);
+                }
+                PointerEventKind::Leave { .. } => {
+                    self.mouse = None;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 // Dispatch of wl_surface/wl_callback/wl_buffer/layer-shell: sctk's

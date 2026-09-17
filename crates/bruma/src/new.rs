@@ -47,6 +47,12 @@ const TEMPLATES: &[Template] = &[
         assets: &[],
         params: &[("fade", "Fade", 0.35), ("speed", "Speed", 0.5)],
     },
+    Template {
+        name: "parallax",
+        source: include_str!("templates/parallax.wgsl"),
+        assets: &[],
+        params: &[("depth", "Depth", 0.5), ("glow", "Glow", 0.35)],
+    },
 ];
 
 /// One scaffolding template: shader source, extra asset files and the
@@ -84,10 +90,12 @@ const PREVIEW_PNG: &[u8] = &[
 /// `None` if the template name is unknown.
 fn manifest_json(title: &str, template: &str) -> Option<String> {
     let tpl = TEMPLATES.iter().find(|t| t.name == template)?;
-    let permissions = if template == "trail" {
-        "\"params\", \"feedback\""
-    } else {
-        "\"params\""
+    // Capabilities the template needs: plain shaders only read params;
+    // trail needs the previous frame; parallax reacts to the pointer.
+    let permissions = match template {
+        "trail" => "\"params\", \"feedback\"",
+        "parallax" => "\"params\", \"mouse\"",
+        _ => "\"params\"",
     };
     let mut json = format!(
         r#"{{
@@ -249,6 +257,6 @@ mod tests {
     fn unknown_template_lists_available() {
         let err = create("x", "vortice", None).unwrap_err();
         assert!(err.contains("unknown template"));
-        assert!(err.contains("waves, fog, water, water-photo, trail"));
+        assert!(err.contains("waves, fog, water, water-photo, trail, parallax"));
     }
 }
