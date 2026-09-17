@@ -15,7 +15,14 @@ solid color, the `.wallpaper` package format (secure installation with
 `validate`/`install`), and a full desktop experience — multi-monitor
 with a different wallpaper per screen, automatic pause on
 fullscreen/lock/battery, per-output HiDPI scale and hot config reload.
-In progress: creator tools (Phase 6) — see [PLAN.md](PLAN.md).
+
+Phase 6 (creator tools) delivers the shader features and scaffolding:
+`bruma new` bootstraps a package from a template; shaders get the real
+local time (`u_clock`), package images as textures (`textures` in the
+manifest), their own previous frame (`feedback` permission: trails,
+reaction-diffusion) and the pointer position (`mouse` permission:
+parallax). Parameter UI and drag-and-drop install are still pending —
+see [PLAN.md](PLAN.md).
 
 ```bash
 bruma run                        # no flags: uses the persistent config

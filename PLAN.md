@@ -151,11 +151,26 @@
 - Verified compatibility: niri (reference), Hyprland, sway, KWin.
 - GNOME/Mutter remains a v1 non-goal.
 
-### Phase 6 — Creator tools (3-6 weeks)
-- WGSL templates: gradient, particles, waves, mouse reaction.
-- Manifest-declared parameters with generated UI.
-- Commands: `bruma new`, `bruma pack`.
-- Demo/milestone: a person who does not code creates, packs and shares.
+### Phase 6 — Creator tools (partially complete; see breakdown)
+- ✅ `u_clock`: real local time (h/m/s) in the uniform block — day/night
+  tints and clock wallpapers.
+- ✅ `bruma new <name> --template <t>`: scaffolding from zero to an
+  installable package (manifest self-checked with the real parser,
+  naga-validated templates).
+- ✅ Templates: waves, fog (FBM + day/night), water (procedural),
+  water-photo (image behind water), trail (feedback), parallax
+  (mouse-reactive aurora).
+- ✅ `textures` in the manifest: package assets exposed to the shader as
+  GPU textures (binding slots 1..8, max 4).
+- ✅ `feedback` permission: previous-frame ping-pong (trails,
+  reaction-diffusion, simulations) with an internal blit pass.
+- ✅ `mouse` permission wired: wl_pointer position feeds `u_mouse` while
+  the cursor hovers the background (parallax works on an empty desktop).
+- Pending: parameter UI generated from the manifest (CLI/TUI),
+  cover/contain aspect handling for textures, MIME association for
+  drag-and-drop install.
+- Milestone (pending the UI): a person who does not code creates, packs
+  and shares.
 
 ### Phase 7 — Public presence (3-6 weeks)
 - Releases on GitHub Releases (binaries per target).

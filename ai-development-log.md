@@ -664,3 +664,51 @@ mixto quedó demostrado).
   Commit único: la traducción es un cambio de texto sin lógica nueva.
 - **Lección:** las convenciones viven en DECISIONS.md o no existen. D13
   queda registrada para que la próxima sesión no repita la deriva.
+
+## 2026-09-17 — Fase 6: motor para creadores (u_clock, texturas, feedback, puntero)
+
+Cuatro hitos commiteados, cada uno con su demo en la máquina real (niri,
+iGPU AMD 660M/RADV) y gates verdes (fmt, clippy 0 warnings, 49 tests).
+
+- **Paso 1 (`e853166`) — reloj real + `bruma new`.** El bloque de
+  uniforms crece a 64 bytes con `u_clock` (hora local h/m/s vía
+  `libc::localtime_r`; tintes día/noche sin tocar el motor). `bruma new
+  <nombre> --template <t>` escribe el paquete completo, autoverificado
+  con el parser real del manifiesto y con naga en tests. Plantillas
+  iniciales: waves, fog (FBM), water (procedural).
+- **Paso 2 (`f5b4cde`) — assets como texturas.** `textures` en el
+  manifiesto (rutas bajo `assets/`, máx. 4, verificadas contra el zip);
+  `AnimatedRenderer::set_textures` las sube con `write_texture` a slots
+  fijos (bindings 2i+1/2i+2) con dummies 1×1 para los vacíos — el
+  hot-reload sigue compartiendo UN layout. Plantilla water-photo: la foto
+  del creador detrás de un agua procedural. Nota de la sesión: el
+  `copy_external_image_to_texture` de wgpu 30 es solo-web; el camino
+  nativo es `write_texture`.
+- **Paso 3 (`35d7fa0`) — feedback (ping-pong).** Nuevo permiso
+  `feedback`: el shader lee su fotograma anterior (grupo 1) y un blit
+  interno lo copia al swapchain — estelas, reaction-diffusion,
+  simulaciones. Plantilla trail. Dos lecciones caras: (1) el error
+  "group 1 not available" fue culpa mía — el blit declara solo el grupo
+  1 pero `build_quad_pipeline` lo mapea como grupo 0; con layout de dos
+  grupos se arregla; (2) wgpu 30 **paniquea** en el primer error de
+  validación no capturado (el daemon moría): ahora
+  `Device::on_uncaptured_error` lo registra — coherente con la filosofía
+  hot-reload ("un shader roto no tira el fondo"). El grupo 1 se bindea
+  dummy también en la ruta de un pase: cualquier pipeline exige TODOS
+  sus grupos bindeados en cada draw.
+- **Paso 4 (`83975ea`) — puntero y parallax.** `wl_seat`/`wl_pointer`
+  vía SCTK 0.21 (SeatState + PointerHandler; los Dispatch impls los
+  genera `delegate_dispatch2`, no hay macros delegadas de seat/pointer
+  en esta versión). `u_mouse` = posición lógica del cursor mientras
+  sobrevuela nuestros fondos, (-1,-1) si no (el Wayland de verdad: una
+  superficie background no recibe el puntero bajo ventanas). Plantilla
+  parallax: aurora de 3 capas con profundidad que deriva sola cuando no
+  hay cursor.
+- **Verificación en vivo:** los 6 templates pasan naga en tests (un
+  `target` reservado de WGSL lo cazó el test, no la GPU); demo-trail y
+  demo-water corren 8 s con 0 errores; demo-parallax en sesión real con
+  "pointer capability bound" y ambas salidas animando.
+- **Pendiente de la fase:** UI de parámetros generada del manifiesto,
+  cover/contain para texturas, asociación MIME del hito drag-and-drop.
+- **Gates finales:** fmt, clippy 0 warnings, 49 tests, `cargo install`
+  OK. Evidencia en `demos/fase6/`.
