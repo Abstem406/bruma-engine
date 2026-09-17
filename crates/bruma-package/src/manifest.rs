@@ -43,8 +43,10 @@ pub struct Manifest {
     pub entry: String,
     /// Preview image path, relative to the package root.
     pub preview: String,
-    /// Capabilities the wallpaper declares. Only `params` and `mouse` are
-    /// recognized today; anything else is a validation error.
+    /// Capabilities the wallpaper declares. Known today: `params`,
+    /// `mouse` (reserved for the pointer uniform) and `feedback` (the
+    /// shader receives the previous frame to paint trails and
+    /// simulations). Anything else is a validation error.
     pub permissions: Vec<String>,
     /// Minimum engine version (semver: "0.1.0").
     pub min_engine: Option<String>,
@@ -150,9 +152,9 @@ impl Manifest {
         }
 
         for p in &raw.permissions {
-            if !matches!(p.as_str(), "params" | "mouse") {
+            if !matches!(p.as_str(), "params" | "mouse" | "feedback") {
                 return Err(PackError::BadParam(format!(
-                    "unknown permission '{p}' (known: params, mouse)"
+                    "unknown permission '{p}' (known: params, mouse, feedback)"
                 )));
             }
         }

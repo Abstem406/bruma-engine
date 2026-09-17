@@ -55,7 +55,13 @@ fn quad_covers_the_four_corners() {
     let (bgl, bg, _uniform_buf) = make_uniforms(&device, &queue);
 
     // The production pipeline with the offline render's format.
-    let pipeline = build_quad_pipeline(&device, wgpu::TextureFormat::Rgba8UnormSrgb, &module, &bgl);
+    let pipeline = build_quad_pipeline(
+        &device,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &module,
+        &bgl,
+        None,
+    );
 
     // Destination texture: render attachment + copy source.
     let texture = device.create_texture(&wgpu::TextureDescriptor {

@@ -24,6 +24,7 @@
 
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use bruma_renderer::FrameRenderer;
 use bruma_renderer::FrameState;
@@ -110,9 +111,81 @@ const UNIFORM_SIZE: u64 = 64;
 /// (sampler).
 const TEXTURE_SLOTS: usize = 4;
 
+/// Bind group layout of group 1: the wallpaper's PREVIOUS frame
+/// (`feedback` permission). One texture + one sampler; pipelines always
+/// carry it so hot-reload can switch between feedback and non-feedback
+/// shaders without rebuilding the layout (a group the shader doesn't
+/// declare is simply unused).
+pub fn prev_frame_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("bruma-prev-frame-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Blit shader for the feedback path: copies the offscreen frame where
+/// the creator's shader just painted onto the swapchain texture. Reads
+/// group 1 (the same layout the feedback shader uses for its input).
+const BLIT_WGSL: &str = r#"
+@group(1) @binding(0)
+var prev_tex: texture_2d<f32>;
+
+@group(1) @binding(1)
+var prev_samp: sampler;
+
+struct VsOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
+    let positions = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0,  1.0),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+    );
+    let uvs = array<vec2<f32>, 4>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+    );
+
+    var out: VsOutput;
+    out.position = vec4<f32>(positions[idx], 0.0, 1.0);
+    out.uv = uvs[idx];
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
+    return textureSample(prev_tex, prev_samp, in.uv);
+}
+"#;
+
 /// Builds the quad pipeline (`TriangleStrip` topology, `REPLACE` blend,
 /// vertices generated in the WGSL) for an already compiled module and its
-/// bind group layout.
+/// bind group layouts: group 0 (uniforms + textures), group 1 (previous
+/// frame; unused by shaders without the `feedback` permission).
 ///
 /// Pure with respect to surfaces: it only knows the device and the target
 /// format. So [`crate::AnimatedRenderer`] and the coverage tests use the
@@ -128,10 +201,11 @@ pub fn build_quad_pipeline(
     format: wgpu::TextureFormat,
     module: &wgpu::ShaderModule,
     bind_group_layout: &wgpu::BindGroupLayout,
+    prev_frame_layout: Option<&wgpu::BindGroupLayout>,
 ) -> wgpu::RenderPipeline {
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("bruma-quad-layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
+        bind_group_layouts: &[Some(bind_group_layout), prev_frame_layout],
         immediate_size: 0,
     });
 
@@ -205,6 +279,12 @@ impl GpuShared {
             trace: wgpu::Trace::Off,
         }))
         .map_err(|e| RendererError::Device(e.to_string()))?;
+        // Uncaptured validation errors are logged, not fatal: a broken
+        // frame must not take the daemon down (same philosophy as shader
+        // hot-reload). Without this handler wgpu panics on first error.
+        device.on_uncaptured_error(Arc::new(move |error| {
+            log::error!("wgpu: {error}");
+        }));
         let info = adapter.get_info();
         log::info!(
             "wgpu: adapter {} ({:?}), backend {:?} (shared across outputs)",
@@ -781,6 +861,10 @@ pub struct AnimatedRenderer {
     uniform_buf: wgpu::Buffer,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
+    /// Group-1 placeholder (1×1 dummy texture): every pipeline carries
+    /// the prev-frame layout, so non-feedback draws bind this to satisfy
+    /// the layout without feeding the shader a real frame.
+    dummy_prev: wgpu::BindGroup,
     /// Current pipeline (replaced on each valid hot-reload).
     pipeline: wgpu::RenderPipeline,
     /// Last configured size (to repaint after reload without waiting for
@@ -805,6 +889,34 @@ pub struct AnimatedRenderer {
     /// package's `assets/`.
     texture_views: Vec<wgpu::TextureView>,
     texture_samplers: Vec<wgpu::Sampler>,
+    /// Previous-frame input requested (manifest `feedback` permission).
+    feedback: bool,
+    /// Group-1 layout for the previous frame. EVERY pipeline carries it
+    /// (created in the constructor): a shader declaring group 1 needs it
+    /// from the first pipeline on, and hot-reload can flip between
+    /// feedback and non-feedback variants without rebuilding anything.
+    prev_frame_layout: wgpu::BindGroupLayout,
+    /// Offscreen ping-pong, built lazily on the first frame (the swapchain
+    /// format is known by then). `None` while no frame ran yet.
+    ping_pong: Option<PingPong>,
+}
+
+/// The two offscreen targets of a feedback wallpaper plus the blit
+/// pipeline that copies the just-painted one to the swapchain. Rebuilt
+/// when the frame size changes.
+struct PingPong {
+    size: (u32, u32),
+    /// Kept alive: a dropped texture invalidates its views and bind
+    /// groups (the fields above only hold the views).
+    _textures: [wgpu::Texture; 2],
+    views: [wgpu::TextureView; 2],
+    /// Group-1 bind groups: `groups[i]` binds `views[i]` + the sampler.
+    /// The feedback shader reads `groups[read]`; the blit copies from
+    /// `groups[write]`.
+    groups: [wgpu::BindGroup; 2],
+    blit: wgpu::RenderPipeline,
+    /// Even frame → read 0 / write 1; toggles each frame.
+    flip: bool,
 }
 
 /// Shader reload event for [`AnimatedRenderer::set_reload_callback`]'s
@@ -910,9 +1022,14 @@ impl AnimatedRenderer {
                     label: Some("bruma-anim-bgl"),
                     entries: &layout_entries,
                 });
+        // Group 1 (previous frame) exists for every pipeline: unused by
+        // non-feedback shaders, ready when a feedback shader lands via
+        // hot-reload.
+        let prev_frame_layout = prev_frame_bind_group_layout(ctx.device());
 
         // 1x1 opaque black dummies: declared-but-unbound slots sample
         // black instead of failing validation.
+        let device = ctx.device();
         let dummy = ctx.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("bruma-texture-dummy"),
             size: wgpu::Extent3d {
@@ -937,13 +1054,26 @@ impl AnimatedRenderer {
         // Initial bind group: every slot bound to the 1×1 dummy (a
         // shader that samples undeclared textures gets black, not an
         // error). `set_textures` swaps in real views from the package.
-        let device = ctx.device();
         let initial_views: Vec<wgpu::TextureView> =
             (0..TEXTURE_SLOTS).map(|_| dummy_view.clone()).collect();
         let initial_samplers: Vec<wgpu::Sampler> =
             (0..TEXTURE_SLOTS).map(|_| sampler.clone()).collect();
         let view_refs: Vec<&wgpu::TextureView> = initial_views.iter().collect();
         let sampler_refs: Vec<&wgpu::Sampler> = initial_samplers.iter().collect();
+        let dummy_prev = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bruma-prev-dummy-bg"),
+            layout: &prev_frame_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&dummy_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
         let bind_group = Self::make_bind_group(
             &uniform_buf,
             device,
@@ -951,7 +1081,8 @@ impl AnimatedRenderer {
             &view_refs,
             &sampler_refs,
         );
-        let pipeline = Self::build_pipeline(&ctx, &source, &bind_group_layout)?;
+        let pipeline =
+            Self::build_pipeline(&ctx, &source, &bind_group_layout, Some(&prev_frame_layout))?;
 
         let renderer = Self {
             ctx,
@@ -960,6 +1091,7 @@ impl AnimatedRenderer {
             uniform_buf,
             bind_group_layout,
             bind_group,
+            dummy_prev,
             pipeline,
             last_size: (0, 0),
             on_reload: None,
@@ -967,8 +1099,21 @@ impl AnimatedRenderer {
             param_overrides: Vec::new(),
             texture_views: initial_views,
             texture_samplers: initial_samplers,
+            feedback: false,
+            prev_frame_layout,
+            ping_pong: None,
         };
         Ok(renderer)
+    }
+
+    /// Enables the previous-frame input (manifest `feedback`
+    /// permission). Must be called before the first frame.
+    ///
+    /// Every pipeline already carries the group-1 layout (unused by
+    /// non-feedback shaders, so nothing to rebuild); this only arms the
+    /// offscreen ping-pong, allocated lazily on the first frame.
+    pub fn set_feedback(&mut self) {
+        self.feedback = true;
     }
 
     /// Sets THIS output's parameter overrides (Phase 5).
@@ -1117,6 +1262,7 @@ impl AnimatedRenderer {
         ctx: &SurfaceCtx,
         source: &str,
         bind_group_layout: &wgpu::BindGroupLayout,
+        prev_frame_layout: Option<&wgpu::BindGroupLayout>,
     ) -> Result<wgpu::RenderPipeline, RendererError> {
         let shader = compile_wgsl(ctx.device(), source, "bruma-anim-shader")?;
 
@@ -1125,6 +1271,7 @@ impl AnimatedRenderer {
             ctx.format(),
             &shader,
             bind_group_layout,
+            prev_frame_layout,
         ))
     }
 
@@ -1153,7 +1300,12 @@ impl AnimatedRenderer {
             log::warn!("hot-reload: could not read {}", self.shader_path.display());
             return;
         };
-        match Self::build_pipeline(&self.ctx, &source, &self.bind_group_layout) {
+        match Self::build_pipeline(
+            &self.ctx,
+            &source,
+            &self.bind_group_layout,
+            Some(&self.prev_frame_layout),
+        ) {
             Ok(pipeline) => {
                 log::info!("hot-reload: shader applied");
                 self.pipeline = pipeline;
@@ -1197,29 +1349,212 @@ impl AnimatedRenderer {
                     label: Some("bruma-anim-frame"),
                 });
 
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("bruma-anim-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.draw(0..4, 0..1);
+        let format = self.ctx.format();
+
+        // Feedback path: two passes inside ONE encoder and submission —
+        // the creator's shader paints offscreen (reading the previous
+        // frame), then a blit copies the result to the swapchain.
+        if self.feedback {
+            let device = self.ctx.device();
+            let Some(pp) = Self::ensure_ping_pong(
+                &mut self.ping_pong,
+                device,
+                &self.bind_group_layout,
+                &self.prev_frame_layout,
+                width,
+                height,
+                format,
+            ) else {
+                log::warn!("feedback: offscreen targets unavailable; frame skipped");
+                self.ctx.submit_and_present(encoder, frame);
+                return;
+            };
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("bruma-feedback-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &pp.views[1 - pp.flip as usize],
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_bind_group(1, &pp.groups[pp.flip as usize], &[]);
+                pass.draw(0..4, 0..1);
+            }
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("bruma-blit-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                // The blit declares BOTH groups: it shares the pipeline
+                // layout with the feedback shader (group 0 must be
+                // satisfied even unused).
+                pass.set_pipeline(&pp.blit);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_bind_group(1, &pp.groups[1 - pp.flip as usize], &[]);
+                pass.draw(0..4, 0..1);
+            }
+            pp.flip = !pp.flip;
+            self.ctx.submit_and_present(encoder, frame);
+            return;
         }
 
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("bruma-anim-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(1, &self.dummy_prev, &[]);
+        pass.draw(0..4, 0..1);
+        drop(pass);
+
         self.ctx.submit_and_present(encoder, frame);
+    }
+
+    /// Returns the ping-pong pool for the given size, allocating or
+    /// re-allocating it when missing or resized.
+    ///
+    /// Takes the pool slot, device and group-1 layout as separate
+    /// arguments (not `&mut self`): the caller keeps borrowing other
+    /// fields (`pipeline`, `bind_group`) for the render passes while
+    /// `pp` stays alive — field-disjoint borrows, impossible through a
+    /// whole-`self` method call.
+    fn ensure_ping_pong<'a>(
+        slot: &'a mut Option<PingPong>,
+        device: &wgpu::Device,
+        group0_layout: &wgpu::BindGroupLayout,
+        prev_layout: &wgpu::BindGroupLayout,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Option<&'a mut PingPong> {
+        // The offscreen targets keep the SWAPCHAIN format: the creator's
+        // pipeline then renders into either surface with zero format
+        // juggling, and the blit round-trips byte-identically (srgb view
+        // decodes on sample, srgb attachment re-encodes on store).
+        let rebuild = match &*slot {
+            Some(pp) => pp.size != (width, height),
+            None => true,
+        };
+        if rebuild {
+            let desc = wgpu::TextureDescriptor {
+                label: Some("bruma-feedback-target"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            };
+            let textures = [device.create_texture(&desc), device.create_texture(&desc)];
+            let views = [
+                textures[0].create_view(&wgpu::TextureViewDescriptor::default()),
+                textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
+            ];
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("bruma-feedback-sampler"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            let groups = [
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("bruma-feedback-read0"),
+                    layout: prev_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&views[0]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&sampler),
+                        },
+                    ],
+                }),
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("bruma-feedback-read1"),
+                    layout: prev_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&views[1]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&sampler),
+                        },
+                    ],
+                }),
+            ];
+            let Ok(blit_module) = compile_wgsl(device, BLIT_WGSL, "bruma-feedback-blit") else {
+                // The blit is built from a const string: failure would
+                // be a programming error, not a runtime condition.
+                log::error!("feedback: internal blit shader failed to compile");
+                return None;
+            };
+            // The blit shares the creator shader's two-group layout: it
+            // declares only group 1 (its source frame), but group 0 must
+            // still be present in the pipeline layout (and bound in the
+            // pass, even unused).
+            let blit = build_quad_pipeline(
+                device,
+                format,
+                &blit_module,
+                group0_layout,
+                Some(prev_layout),
+            );
+            *slot = Some(PingPong {
+                size: (width, height),
+                _textures: textures,
+                views,
+                groups,
+                blit,
+                flip: false,
+            });
+        }
+        slot.as_mut()
     }
 }
 

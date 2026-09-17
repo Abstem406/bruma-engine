@@ -366,11 +366,13 @@ fn service_command(args: &[String]) {
 enum Source {
     /// Animated shader (from a package or a loose file) with overrides by
     /// position. `textures` are the package's texture files in manifest
-    /// order (absolute paths); empty for loose shaders.
+    /// order (absolute paths); empty for loose shaders. `feedback` arms
+    /// the previous-frame ping-pong (manifest `feedback` permission).
     Shader {
         path: String,
         overrides: Vec<(usize, f32)>,
         textures: Vec<String>,
+        feedback: bool,
     },
     /// Static image.
     Image(String),
@@ -482,6 +484,7 @@ fn resolve_source(
                 .iter()
                 .map(|rel| pkg_path.join(rel).display().to_string())
                 .collect(),
+            feedback: manifest.permissions.iter().any(|p| p == "feedback"),
         };
     }
     if let Some(p) = &oc.shader {
@@ -489,6 +492,7 @@ fn resolve_source(
             path: p.clone(),
             overrides: Vec::new(),
             textures: Vec::new(),
+            feedback: false,
         };
     }
     if let Some(p) = &oc.image {
@@ -703,6 +707,7 @@ fn run_command(args: &[String]) {
                 path: p.clone(),
                 overrides: Vec::new(),
                 textures: Vec::new(),
+                feedback: false,
             };
             has_content = true;
         } else if let Some(p) = &image_path {
@@ -799,6 +804,7 @@ fn run_command(args: &[String]) {
                 path,
                 overrides,
                 textures,
+                feedback,
             } => {
                 let mut renderer = unsafe {
                     bruma_renderer_wgpu::AnimatedRenderer::on_shared(
@@ -809,6 +815,11 @@ fn run_command(args: &[String]) {
                     )
                 }
                 .map_err(|e| e.to_string())?;
+                // Feedback wallpapers get the previous frame as group 1
+                // (manifest `feedback` permission).
+                if *feedback {
+                    renderer.set_feedback();
+                }
                 // Package textures (manifest `textures` order) go to the
                 // fixed slots before the first frame; empty for loose
                 // shaders.
