@@ -445,3 +445,37 @@ pura de Variant bool/u32/String, watcher disabled). Total workspace: 33.
 **Nota de diseño:** el estado inicial se consulta sincrónico (Get) y las
 señales solo avisan de cambios; suscribirse solo si el Get respondió (si
 logind no habla, no insistimos).
+
+## 2026-09-16 — Wallpaper por pantalla + config persistente + servicio (Fase 5)
+
+**Qué:**
+1. `FactoryRenderer` (plataforma): la factory puede devolver renderer,
+   color por salida, o ambos — `draw_entry_solid` usa el color de la
+   entrada si lo hay (antes el color era global único).
+2. `AnimatedRenderer::set_param_overrides` (renderer-wgpu): overrides
+   (posición, valor) aplicados sobre FrameState en cada frame. La CLI
+   resuelve nombre→posición contra el manifiesto; el renderer no sabe
+   nada de manifiestos. Un solo runtime → ambos monitores animan
+   sincronizados aunque tengan params distintos.
+3. `bruma/src/config.rs`: config JSON estricta (deny_unknown_fields,
+   params 0..1 validados, color RRGGBB exacto — `#12345` parseaba como
+   número y era un typo: ahora duele). Resolución: salida → default →
+   nada. `bruma run` sin flags la carga sola; `--config RUTA` explícita
+   (excluyente con flags de fuente); con flags, legacy intacto.
+4. `bruma config init|show` y `bruma service install|remove`.
+
+**Bug de la unidad systemd cazado por prueba de vida:** con
+`Restart=on-failure`, un SIGTERM se registra `Result=success` y systemd
+NO reviva el proceso. Un wallpaper "revive si muere" quiere
+`Restart=always`. Verificado: kill -TERM → nuevo PID en 2 s.
+
+**Demo en tu máquina:** config real con eDP-1 = onda intensidad 0.15,
+HDMI-A-1 = color #1d2021 → log confirma `eDP-1 (gpu)` + `HDMI-A-1
+(color)` y el píxel de HDMI mide exactamente srgb(29,32,33). El servicio
+quedó instalado y activo: el fondo sobrevive al cierre de la terminal.
+
+**Limitación honesta:** tu laptop está en batería, así que la pausa
+global (D12) congela la animación — la verificación del shader con dos
+params distintos por pantalla queda pendiente de tener cargador a mano
+(el camino de overrides está testeado y el pipeline de color/animado
+mixto quedó demostrado).

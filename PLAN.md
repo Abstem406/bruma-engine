@@ -119,8 +119,17 @@
   escapados (`_34`) usados tal cual. Medido: 35→1-2 ticks CPU/8s con la
   máquina en batería; lock/unlock verificado con transiciones en el
   log. Drenaje de señales sin hilos: `process(ZERO)` acotado por frame.
-- Pendiente en la fase: DPI/escala por salida, wallpaper distinto por
-  pantalla, config persistente.
+- ✅ Wallpaper distinto por pantalla + config persistente: config JSON
+  estricta (`~/.config/bruma/config.json`, deny_unknown_fields, params
+  validados) con `default` + entradas por nombre de salida. Factory
+  extendida (`FactoryRenderer`: renderer y/o color por salida). Params
+  POR SALIDA resueltos por nombre contra el manifiesto y aplicados en
+  cada renderer (un solo runtime → animación sincronizada). CLI:
+  `bruma config init|show`, `bruma run` sin flags carga la config.
+- ✅ Servicio de usuario systemd (`bruma service install|remove`):
+  unidad generada con el exe real, `Restart=always` (verificado: SIGTERM
+  → revive en 2 s), arranca con `graphical-session.target`.
+- Pendiente en la fase: DPI/escala por salida, hotplug de config.
 - Compatibilidad verificada: niri (referencia), Hyprland, sway, KWin.
 - GNOME/Mutter sigue siendo non-goal en v1.
 

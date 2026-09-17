@@ -17,12 +17,40 @@ imagen a pantalla completa (Fase 2), color sólido (Fase 1) y triángulo de
 prueba. En construcción — ver [PLAN.md](PLAN.md).
 
 ```bash
-bruma run                        # fondo de color sólido
-bruma run 0x3B4252               # color hex a elección
+bruma run                        # sin flags: usa la config persistente
+bruma run 0x3B4252               # color hex a elección (todas las pantallas)
 bruma run --gpu                  # triángulo WGSL (prueba de pipeline)
 bruma run --image foto.png       # imagen a pantalla completa
 bruma run --shader hola.wgsl     # shader animado con hot-reload
 bruma run --shader hola.wgsl --fps 60 --param=0.5  # ritmo y parámetros
+bruma run --package mi-onda --param=intensidad=0.9  # paquete instalado
+```
+
+## Escritorio completo (Fase 5)
+
+Una superficie por salida (multi-monitor con GPU compartida), pausa
+automática en fullscreen (solo esa pantalla), sesión bloqueada y
+batería (global, vía logind/UPower). Config persistente por pantalla:
+
+```bash
+bruma config init                # crea ~/.config/bruma/config.json
+bruma config show                # qué va a correr y dónde
+bruma service install            # arranca con la sesión (systemd --user)
+bruma service remove             # lo quita
+```
+
+Ejemplo de `config.json` — cada pantalla lo suyo, params distintos del
+mismo paquete (la animación va sincronizada: un solo reloj):
+
+```json
+{
+  "default": { "package": "onda-bruma-demo", "params": { "intensidad": 0.9 } },
+  "outputs": {
+    "eDP-1":    { "package": "onda-bruma-demo", "params": { "intensidad": 0.15 } },
+    "HDMI-A-1": { "color": "#1d2021" }
+  },
+  "fps": 30
+}
 ```
 
 ## Arquitectura

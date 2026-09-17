@@ -75,6 +75,8 @@ dependencies = [
  "bruma-renderer-wgpu",
  "bruma-runtime",
  "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

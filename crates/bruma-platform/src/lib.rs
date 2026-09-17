@@ -123,6 +123,9 @@ struct OutputEntry {
     /// Renderer de ESTA salida (construido por la factory). `None` si la
     /// factory falló o no hay factory: fallback de color sólido.
     renderer: Option<Box<dyn FrameRenderer>>,
+    /// Color de ESTA salida para el fallback SHM (de la factory). `None`
+    /// usa el color global de la ventana (comportamiento previo).
+    fallback_color: Option<Color>,
 }
 
 /// Información mínima de una salida conectada.
@@ -141,11 +144,50 @@ pub struct OutputSurfaceHandles {
     pub output_name: Option<String>,
 }
 
+/// Resultado de la factory para UNA salida (Fase 5): renderer, color
+/// para el fallback, o ambos.
+///
+/// - `Some(renderer)`: la salida pinta con GPU.
+/// - `None` + `Some(color)`: la salida pinta ese color por SHM
+///   (independiente del color global de `BackgroundWindow::new`).
+/// - `Err`: la salida cae al color global (comportamiento previo).
+pub struct FactoryRenderer {
+    pub renderer: Option<Box<dyn FrameRenderer>>,
+    pub color: Option<Color>,
+}
+
+impl FactoryRenderer {
+    pub fn renderer(r: Box<dyn FrameRenderer>) -> Self {
+        Self {
+            renderer: Some(r),
+            color: None,
+        }
+    }
+
+    pub fn color(c: Color) -> Self {
+        Self {
+            renderer: None,
+            color: Some(c),
+        }
+    }
+
+    pub fn with_color(mut self, c: Color) -> Self {
+        self.color = Some(c);
+        self
+    }
+}
+
+impl From<Box<dyn FrameRenderer>> for FactoryRenderer {
+    fn from(r: Box<dyn FrameRenderer>) -> Self {
+        Self::renderer(r)
+    }
+}
+
 /// Factory de renderers por superficie. Devuelve `Err` con el motivo si
 /// no se pudo construir; esa salida degrada a color sólido (con log) y
 /// las demás siguen — un escritorio con N pantallas no muere por una.
 pub type SurfaceRendererFactory =
-    Box<dyn FnMut(&OutputSurfaceHandles) -> Result<Box<dyn FrameRenderer>, String>>;
+    Box<dyn FnMut(&OutputSurfaceHandles) -> Result<FactoryRenderer, String>>;
 
 /// Reporte de una salida tras el arranque (para el log del CLI).
 #[derive(Debug, Clone)]
@@ -273,7 +315,7 @@ impl BackgroundWindow {
         let mut taken = Some(renderer);
         self.state.factory = Some(Box::new(move |_handles| {
             if let Some(r) = taken.take() {
-                Ok(r)
+                Ok(FactoryRenderer::renderer(r))
             } else {
                 Err("set_frame_renderer solo provee un renderer: \
                      usa set_renderer_factory para multi-salida"
@@ -557,9 +599,10 @@ impl BackgroundState {
         layer.commit();
 
         // Renderer por salida, con los punteros crudos de LA superficie
-        // recién creada. Error de factory = color sólido (con log): un
-        // escritorio de N pantallas no muere por una.
-        let renderer = self.build_renderer(conn, &layer, output);
+        // recién creada. La factory puede dar renderer, color de
+        // fallback propio, ambos, o fallar (color global): un escritorio
+        // de N pantallas no muere por una.
+        let (renderer, fallback_color) = self.build_renderer(conn, &layer, output);
 
         log::info!("superficie de fondo creada en salida {:?}", entry_info.name);
         self.outputs.push(OutputEntry {
@@ -570,6 +613,7 @@ impl BackgroundState {
             height: 0,
             configured: false,
             renderer,
+            fallback_color,
         });
     }
 
@@ -579,8 +623,10 @@ impl BackgroundState {
         conn: &Connection,
         layer: &LayerSurface,
         output: &wl_output::WlOutput,
-    ) -> Option<Box<dyn FrameRenderer>> {
-        let factory = self.factory.as_mut()?;
+    ) -> (Option<Box<dyn FrameRenderer>>, Option<Color>) {
+        let Some(factory) = self.factory.as_mut() else {
+            return (None, None);
+        };
         let display_ptr = {
             let ptr = conn.backend().display_id().as_ptr();
             NonNull::new(ptr).expect("wl_display vivo").cast()
@@ -596,13 +642,13 @@ impl BackgroundState {
             output_name: info.as_ref().and_then(|i| i.name.clone()),
         };
         match factory(&handles) {
-            Ok(r) => Some(r),
+            Ok(fr) => (fr.renderer, fr.color),
             Err(e) => {
                 log::warn!(
                     "salida {:?} sin renderer GPU (fallback a color): {e}",
                     handles.output_name
                 );
-                None
+                (None, None)
             }
         }
     }
@@ -664,7 +710,7 @@ impl BackgroundState {
     /// Fallback de color para la entrada idx (usar cuando NO hay renderer).
     fn draw_entry_solid(&mut self, idx: usize) {
         let (w, h) = (self.outputs[idx].width, self.outputs[idx].height);
-        let color = self.color;
+        let color = self.outputs[idx].fallback_color.unwrap_or(self.color);
         let entry = &mut self.outputs[idx];
         Self::draw_solid_entry(entry, &mut self.pool, w, h, &color);
     }

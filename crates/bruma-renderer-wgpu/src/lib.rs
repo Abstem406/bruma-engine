@@ -783,6 +783,11 @@ pub struct AnimatedRenderer {
     /// reescriben el mismo contenido roto y aviso de recuperación con el
     /// pipeline ya activo.
     last_error: Option<String>,
+    /// Overrides de parámetros de ESTA salida: posición en `params[]` →
+    /// valor. Resueltos por NOMBRE contra el manifiesto en la CLI (una
+    /// salida puede tener `intensidad=0.2` y otra `0.9` con el mismo
+    /// shader y runtime compartido → animación sincronizada).
+    param_overrides: Vec<(usize, f32)>,
 }
 
 /// Evento de recarga de shader para el callback de
@@ -891,7 +896,22 @@ impl AnimatedRenderer {
             last_size: (0, 0),
             on_reload: None,
             last_error: None,
+            param_overrides: Vec::new(),
         })
+    }
+
+    /// Fija overrides de parámetros de ESTA salida (Fase 5).
+    ///
+    /// `overrides` va en pares (posición_del_parámetro, valor); la
+    /// resolución nombre→posición la hace el CLI contra el manifiesto
+    /// (el renderer no sabe nada de manifiestos). Valores fuera de
+    /// 0..=1 se recortan; posiciones fuera de 0..4 se descartan.
+    pub fn set_param_overrides(&mut self, overrides: Vec<(usize, f32)>) {
+        self.param_overrides = overrides
+            .into_iter()
+            .filter(|(i, _)| *i < 4)
+            .map(|(i, v)| (i, v.clamp(0.0, 1.0)))
+            .collect();
     }
 
     /// Instala el callback de eventos de recarga (p. ej. para convertir
@@ -1044,14 +1064,22 @@ impl FrameRenderer for AnimatedRenderer {
         // Hot-reload perezoso: solo si el mtime cambió.
         self.maybe_reload(state.width, state.height);
 
+        // Aplica los overrides de ESTA salida sobre el estado global.
+        let mut params = state.params;
+        for (idx, value) in &self.param_overrides {
+            if let Some(p) = params.get_mut(*idx) {
+                *p = *value;
+            }
+        }
+
         // Sube los uniforms del frame (32 bytes).
         let uniforms = Uniforms {
             time: state.time,
             // Fase 3: `param0` con valor por defecto 0. La UI generada
             // desde el manifiesto .wallpaper llega en la Fase 6.
-            params0: state.params.first().copied().unwrap_or(0.0),
+            params0: params.first().copied().unwrap_or(0.0),
             mouse: [state.mouse_x, state.mouse_y],
-            params: state.params,
+            params,
             res: [state.width as f32, state.height as f32],
             _pad_end: [0.0; 2],
         };
