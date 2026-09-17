@@ -361,95 +361,122 @@ fn run_command(args: &[String]) {
             std::process::exit(1);
         });
 
-    if let Some(path) = &shader_path {
-        // Fase 3: shader animado con hot-reload. El renderer se crea ANTES
-        // del primer configure para que pinte él el primer frame; el bucle
-        // animado lo conduce el runtime (ver abajo).
-        let mut renderer = unsafe {
-            bruma_renderer_wgpu::AnimatedRenderer::new_wayland(
-                window.display_ptr(),
-                window.surface_ptr(),
-                std::path::Path::new(path),
-            )
-        }
-        .unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        });
-
-        // El aviso de "shader rechazado" debe verse aunque bruma corra
-        // como servicio sin terminal: notificación de escritorio vía
-        // D-Bus (best-effort; sin bus de sesión es un no-op). El dedup
-        // de eventos ya lo hace el renderer; aquí solo amortiguamos
-        // notificaciones idénticas a menos de 2 s (típico: varios
-        // guardados seguidos del mismo autosave).
-        let notifier = std::rc::Rc::new(bruma_platform::DesktopNotifier::new());
-        let mut last_notify: Option<(String, std::time::Instant)> = None;
-        const MIN_NOTIFY_GAP: Duration = Duration::from_secs(2);
-        renderer.set_reload_callback(Box::new(move |event| {
-            use bruma_renderer_wgpu::ReloadEvent;
-            match event {
-                ReloadEvent::Rejected { error } => {
-                    // naga puede dar errores largos multi-línea: nos
-                    // quedamos con la primera línea y recortamos a 140
-                    // bytes para que la burbuja sea legible.
-                    let first_line = error.lines().next().unwrap_or(error);
-                    let mut brief: String = first_line.chars().take(140).collect();
-                    if brief.len() < first_line.len() {
-                        brief.push('…');
-                    }
-                    let now = std::time::Instant::now();
-                    let fresh = last_notify.as_ref().is_none_or(|(m, t)| {
-                        now.duration_since(*t) >= MIN_NOTIFY_GAP || *m != brief
-                    });
-                    if fresh {
-                        last_notify = Some((brief.clone(), now));
-                        notifier.shader_rejected(&brief);
-                    }
-                }
-                ReloadEvent::Recovered => {
-                    last_notify = None;
-                    notifier.shader_recovered();
-                }
-                ReloadEvent::Applied => {}
+    // Fase 5: la factory construye un renderer POR SALIDA. La GPU se
+    // descubre una sola vez (GpuShared se clona barato); cada salida
+    // recibe su propio renderer sobre su propia superficie. El error de
+    // factory degrada esa salida a color sólido sin tumbar el resto.
+    let mut shared_gpu: Option<bruma_renderer_wgpu::GpuShared> = None;
+    let mut gpu_err = |e: String| -> String {
+        log::warn!("GPU compartida: {e}");
+        e
+    };
+    let _ = &mut gpu_err;
+    if shader_path.is_some() || image_path.is_some() || gpu {
+        match bruma_renderer_wgpu::GpuShared::new() {
+            Ok(g) => shared_gpu = Some(g),
+            Err(e) => {
+                // Sin GPU, el modo color sólido sigue siendo útil.
+                log::warn!("sin GPU ({e}); todas las salidas en color sólido");
             }
-        }));
-        window.set_frame_renderer(Box::new(renderer));
-    } else if let Some(path) = &image_path {
-        // Fase 2, paso 2: imagen a pantalla completa (hito de la fase).
-        let renderer = unsafe {
-            bruma_renderer_wgpu::ImageRenderer::new_wayland(
-                window.display_ptr(),
-                window.surface_ptr(),
-                std::path::Path::new(path),
-            )
         }
-        .unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        });
-        window.set_frame_renderer(Box::new(renderer));
-    } else if gpu {
-        // Fase 2: renderer wgpu (triángulo de bienvenida). Hay que crearlo
-        // ANTES del primer configure, para que pinte él el primer frame.
-        let renderer = unsafe {
-            bruma_renderer_wgpu::WgpuRenderer::new_wayland(
-                window.display_ptr(),
-                window.surface_ptr(),
-            )
-        }
-        .unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        });
-        window.set_frame_renderer(Box::new(renderer));
     }
 
-    let (w, h) = window.present_once().unwrap_or_else(|e| {
+    // Callback de hot-reload compartido por todas las salidas (una sola
+    // notificación aunque haya N superficies recargando el mismo shader).
+    let notifier = std::rc::Rc::new(bruma_platform::DesktopNotifier::new());
+    let notify_state: std::rc::Rc<std::cell::RefCell<Option<(String, std::time::Instant)>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+
+    let shader_for_factory = shader_path.clone();
+    let image_for_factory = image_path.clone();
+    let notifier_f = notifier.clone();
+    let notify_state_f = notify_state.clone();
+    window.set_renderer_factory(Box::new(move |handles| {
+        let display = handles.display_ptr;
+        let surface = handles.surface_ptr;
+        let renderer: Box<dyn bruma_renderer_wgpu::FrameRendererAlias> =
+            if let Some(path) = &shader_for_factory {
+                let mut renderer = unsafe {
+                    bruma_renderer_wgpu::AnimatedRenderer::on_shared(
+                        shared_gpu.as_ref().ok_or("sin GPU")?,
+                        display,
+                        surface,
+                        std::path::Path::new(path),
+                    )
+                }
+                .map_err(|e| e.to_string())?;
+
+                // Aviso de "shader rechazado" visible sin terminal: D-Bus
+                // best-effort con debounce de 2 s (compartido por salidas).
+                let notifier = notifier_f.clone();
+                let last = notify_state_f.clone();
+                renderer.set_reload_callback(Box::new(move |event| {
+                    use bruma_renderer_wgpu::ReloadEvent;
+                    match event {
+                        ReloadEvent::Rejected { error } => {
+                            let first_line = error.lines().next().unwrap_or(error);
+                            let mut brief: String = first_line.chars().take(140).collect();
+                            if brief.len() < first_line.len() {
+                                brief.push('…');
+                            }
+                            let mut last = last.borrow_mut();
+                            let now = std::time::Instant::now();
+                            let fresh = last.as_ref().is_none_or(|(m, t)| {
+                                now.duration_since(*t) >= Duration::from_secs(2) || *m != brief
+                            });
+                            if fresh {
+                                *last = Some((brief.clone(), now));
+                                notifier.shader_rejected(&brief);
+                            }
+                        }
+                        ReloadEvent::Recovered => {
+                            *last.borrow_mut() = None;
+                            notifier.shader_recovered();
+                        }
+                        ReloadEvent::Applied => {}
+                    }
+                }));
+                Box::new(renderer)
+            } else if let Some(path) = &image_for_factory {
+                Box::new(
+                    unsafe {
+                        bruma_renderer_wgpu::ImageRenderer::on_shared(
+                            shared_gpu.as_ref().ok_or("sin GPU")?,
+                            display,
+                            surface,
+                            std::path::Path::new(path),
+                        )
+                    }
+                    .map_err(|e| e.to_string())?,
+                )
+            } else {
+                Box::new(
+                    unsafe {
+                        bruma_renderer_wgpu::WgpuRenderer::on_shared(
+                            shared_gpu.as_ref().ok_or("sin GPU")?,
+                            display,
+                            surface,
+                        )
+                    }
+                    .map_err(|e| e.to_string())?,
+                )
+            };
+        Ok(renderer)
+    }));
+
+    let reports = window.present_once().unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
-    log::info!("fondo activo: {w}x{h}px — Ctrl-C para salir");
+    for r in &reports {
+        let modo = if r.gpu { "gpu" } else { "color" };
+        log::info!(
+            "fondo activo en {:?}: {}x{}px ({modo}) — Ctrl-C para salir",
+            r.name,
+            r.width,
+            r.height
+        );
+    }
 
     // El modo del bucle lo decide el renderer instalado: animado (shader)
     // conduce frames a la cadencia del runtime; estático (color, imagen,

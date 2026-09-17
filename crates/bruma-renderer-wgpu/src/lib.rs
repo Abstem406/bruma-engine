@@ -26,6 +26,10 @@ use std::ptr::NonNull;
 
 use bruma_renderer::FrameRenderer;
 use bruma_renderer::FrameState;
+
+/// Alias del contrato de frames para consumidores del crate (la CLI
+/// anota tipos con esto sin depender directamente de bruma-renderer).
+pub use bruma_renderer::FrameRenderer as FrameRendererAlias;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
@@ -150,63 +154,37 @@ pub fn build_quad_pipeline(
     })
 }
 
-/// Estado GPU compartido por todos los renderers de esta fase: instancia,
-/// adaptador, dispositivo, cola y la superficie ya asociada al adaptador.
+/// Contexto GPU **compartido entre salidas** (Fase 5): instancia,
+/// adaptador, device y queue. `Device`/`Queue`/`Instance`/`Adapter` son
+/// `Arc` internos (`Clone`): una sola GPU sirve a todas las superficies —
+/// lo contrario (un device por salida) multiplica VRAM del driver.
 ///
 /// Elección de adaptador: `LowPower` deliberado — bruma corre 24/7 y en
 /// sistemas híbridos (iGPU + dGPU) conviene que la dedicada duerma.
-/// FUTURO (Fase 5): selección explícita por config/CLI en lugar de dejar
-/// la decisión al driver.
-pub(crate) struct GpuContext {
-    _instance: wgpu::Instance,
-    _adapter: wgpu::Adapter,
+/// FUTURO: selección explícita por config/CLI en lugar de dejar la
+/// decisión al driver.
+#[derive(Clone)]
+pub struct GpuShared {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
-    surface_format: wgpu::TextureFormat,
-    configured_size: (u32, u32),
 }
 
-// SAFETY: los punteros crudos deben ser válidos y el display/surface
-// deben sobrevivir a la wgpu::Surface resultante; el caller (bruma CLI)
-// garantiza el orden de dropeo: conexión Wayland > renderer.
-impl GpuContext {
-    /// Crea el contexto sobre la superficie Wayland indicada.
-    ///
-    /// # Safety
-    ///
-    /// Igual que [`wgpu::Instance::create_surface_unsafe`]: los punteros
-    /// deben ser válidos y el display/surface deben sobrevivir a la
-    /// `wgpu::Surface` resultante. El caller (`bruma`) garantiza el orden
-    /// de dropeo: conexión Wayland > renderer.
-    pub(crate) unsafe fn new_wayland(
-        display_ptr: NonNull<std::ffi::c_void>,
-        surface_ptr: NonNull<std::ffi::c_void>,
-    ) -> Result<Self, RendererError> {
+impl GpuShared {
+    /// Descubre el adaptador y crea el device compartido (sin superficie:
+    /// sirve para cualquier salida que llegue después).
+    pub fn new() -> Result<Self, RendererError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
-
-        let display_handle = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display_ptr));
-        let window_handle = RawWindowHandle::Wayland(WaylandWindowHandle::new(surface_ptr));
-        let surface = unsafe {
-            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: Some(display_handle),
-                raw_window_handle: window_handle,
-            })
-        }
-        .map_err(|e| RendererError::NoAdapter(e.to_string()))?;
-
-        // El adaptador debe ser compatible con ESTA superficie (no vale
-        // cualquiera): pide uno que pueda presentar en ella.
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: Some(&surface),
+            compatible_surface: None,
             ..Default::default()
         }))
         .map_err(|e| RendererError::NoAdapter(e.to_string()))?;
-
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("bruma-device"),
             required_features: wgpu::Features::empty(),
@@ -216,44 +194,104 @@ impl GpuContext {
             trace: wgpu::Trace::Off,
         }))
         .map_err(|e| RendererError::Device(e.to_string()))?;
-
-        let adapter_info = adapter.get_info();
+        let info = adapter.get_info();
         log::info!(
-            "wgpu: adaptador {} ({:?}), backend {:?}",
-            adapter_info.name,
-            adapter_info.device_type,
-            adapter_info.backend
+            "wgpu: adaptador {} ({:?}), backend {:?} (compartido entre salidas)",
+            info.name,
+            info.device_type,
+            info.backend
         );
+        Ok(Self {
+            instance,
+            adapter,
+            device,
+            queue,
+        })
+    }
 
-        let surface_format = surface
-            .get_capabilities(&adapter)
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+}
+
+impl Default for GpuShared {
+    fn default() -> Self {
+        Self::new().expect("adaptador GPU disponible (¿Vulkan?)")
+    }
+}
+
+/// Superficie wgpu de UNA salida, sobre el [`GpuShared`] compartido.
+///
+/// Une la superficie Wayland cruda con su configuración (formato elegido
+/// por salida — pueden diferir — y tamaño). Es lo único por-salida; el
+/// device/queue son compartidos.
+pub struct SurfaceCtx {
+    shared: GpuShared,
+    surface: wgpu::Surface<'static>,
+    format: wgpu::TextureFormat,
+    configured_size: (u32, u32),
+}
+
+// SAFETY: los punteros crudos deben ser válidos y el display/surface
+// deben sobrevivir a la wgpu::Surface resultante; el caller (bruma CLI)
+// garantiza el orden de dropeo: conexión Wayland > renderers.
+impl SurfaceCtx {
+    /// Crea la superficie sobre la conexión Wayland indicada y elige el
+    /// formato de swapchain (el primero soportado por esta salida).
+    ///
+    /// # Safety
+    ///
+    /// Igual que [`wgpu::Instance::create_surface_unsafe`]: los punteros
+    /// deben ser válidos y el display/surface deben sobrevivir a la
+    /// `wgpu::Surface` resultante. El caller garantiza el orden de
+    /// dropeo: conexión Wayland > `SurfaceCtx`.
+    pub unsafe fn new_wayland(
+        shared: &GpuShared,
+        display_ptr: NonNull<std::ffi::c_void>,
+        surface_ptr: NonNull<std::ffi::c_void>,
+    ) -> Result<Self, RendererError> {
+        let display_handle = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display_ptr));
+        let window_handle = RawWindowHandle::Wayland(WaylandWindowHandle::new(surface_ptr));
+        let surface = unsafe {
+            shared
+                .instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: Some(display_handle),
+                    raw_window_handle: window_handle,
+                })
+        }
+        .map_err(|e| RendererError::NoAdapter(e.to_string()))?;
+
+        let format = surface
+            .get_capabilities(&shared.adapter)
             .formats
             .first()
             .copied()
             .ok_or(RendererError::NoSurfaceFormats)?;
-        log::debug!("formato de superficie: {surface_format:?}");
+        log::debug!("formato de superficie (salida): {format:?}");
 
         Ok(Self {
-            _instance: instance,
-            _adapter: adapter,
-            device,
-            queue,
+            shared: shared.clone(),
             surface,
-            surface_format,
+            format,
             configured_size: (0, 0),
         })
     }
 
-    /// Configura (o reconfigura) la superficie de wgpu al tamaño dado.
-    pub(crate) fn configure(&mut self, width: u32, height: u32) {
+    /// Configura (o reconfigura) la superficie al tamaño dado.
+    pub fn configure(&mut self, width: u32, height: u32) {
         if self.configured_size == (width, height) {
             return;
         }
         self.surface.configure(
-            &self.device,
+            &self.shared.device,
             &wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: self.surface_format,
+                format: self.format,
                 color_space: wgpu::SurfaceColorSpace::Auto,
                 width,
                 height,
@@ -266,9 +304,9 @@ impl GpuContext {
         self.configured_size = (width, height);
     }
 
-    /// Obtiene la textura del frame actual, gestionando los estados
+    /// Obtiene la textura del frame actual, gestionando estados
     /// transitorios (reconfigura tras Outdated/Lost en el próximo frame).
-    pub(crate) fn acquire_frame(&mut self) -> Option<wgpu::SurfaceTexture> {
+    pub fn acquire_frame(&mut self) -> Option<wgpu::SurfaceTexture> {
         match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Some(frame),
@@ -284,27 +322,28 @@ impl GpuContext {
         }
     }
 
-    pub(crate) fn device(&self) -> &wgpu::Device {
-        &self.device
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
     }
 
-    pub(crate) fn queue(&self) -> &wgpu::Queue {
-        &self.queue
+    pub fn device(&self) -> &wgpu::Device {
+        &self.shared.device
     }
 
-    pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
-        self.surface_format
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.shared.queue
     }
 
-    fn submit_and_present(&self, encoder: wgpu::CommandEncoder, frame: wgpu::SurfaceTexture) {
-        self.queue.submit([encoder.finish()]);
-        self.queue.present(frame);
+    /// Presenta el frame (submit + present).
+    pub fn submit_and_present(&self, encoder: wgpu::CommandEncoder, frame: wgpu::SurfaceTexture) {
+        self.shared.queue.submit([encoder.finish()]);
+        self.shared.queue.present(frame);
     }
 }
 
 /// Renderer de la Fase 2, paso 1: un triángulo WGSL a pantalla completa.
 pub struct WgpuRenderer {
-    ctx: GpuContext,
+    surface: SurfaceCtx,
     pipeline: wgpu::RenderPipeline,
 }
 
@@ -313,16 +352,31 @@ impl WgpuRenderer {
     ///
     /// # Safety
     ///
-    /// Igual que [`GpuContext::new_wayland`]: los punteros deben ser
+    /// Igual que [`SurfaceCtx::new_wayland`]: los punteros deben ser
     /// válidos y sobrevivir a la superficie; el caller garantiza el orden
     /// de dropeo conexión > renderer.
     pub unsafe fn new_wayland(
         display_ptr: NonNull<std::ffi::c_void>,
         surface_ptr: NonNull<std::ffi::c_void>,
     ) -> Result<Self, RendererError> {
-        let ctx = unsafe { GpuContext::new_wayland(display_ptr, surface_ptr)? };
+        let shared = GpuShared::new()?;
+        unsafe { Self::on_shared(&shared, display_ptr, surface_ptr) }
+    }
 
-        let shader = ctx
+    /// Crea el renderer del triángulo sobre GPU compartida (Fase 5:
+    /// multi-salida). `new_wayland` es el envoltorio de un renderer solo.
+    ///
+    /// # Safety
+    ///
+    /// Igual que [`SurfaceCtx::new_wayland`].
+    pub unsafe fn on_shared(
+        shared: &GpuShared,
+        display_ptr: NonNull<std::ffi::c_void>,
+        surface_ptr: NonNull<std::ffi::c_void>,
+    ) -> Result<Self, RendererError> {
+        let surface = unsafe { SurfaceCtx::new_wayland(shared, display_ptr, surface_ptr)? };
+
+        let shader = surface
             .device()
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("bruma-triangulo"),
@@ -330,14 +384,15 @@ impl WgpuRenderer {
             });
 
         let pipeline_layout =
-            ctx.device()
+            surface
+                .device()
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("bruma-layout"),
                     bind_group_layouts: &[],
                     immediate_size: 0,
                 });
 
-        let pipeline = ctx
+        let pipeline = surface
             .device()
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("bruma-pipeline"),
@@ -353,7 +408,7 @@ impl WgpuRenderer {
                     entry_point: Some("fs_main"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: ctx.surface_format(),
+                        format: surface.format(),
                         blend: Some(wgpu::BlendState::REPLACE),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -372,7 +427,7 @@ impl WgpuRenderer {
                 cache: None,
             });
 
-        Ok(Self { ctx, pipeline })
+        Ok(Self { surface, pipeline })
     }
 }
 
@@ -381,8 +436,8 @@ impl FrameRenderer for WgpuRenderer {
         if width == 0 || height == 0 {
             return;
         }
-        self.ctx.configure(width, height);
-        let Some(frame) = self.ctx.acquire_frame() else {
+        self.surface.configure(width, height);
+        let Some(frame) = self.surface.acquire_frame() else {
             return;
         };
 
@@ -390,7 +445,7 @@ impl FrameRenderer for WgpuRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder =
-            self.ctx
+            self.surface
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("bruma-frame"),
@@ -417,7 +472,7 @@ impl FrameRenderer for WgpuRenderer {
             pass.draw(0..3, 0..1);
         }
 
-        self.ctx.submit_and_present(encoder, frame);
+        self.surface.submit_and_present(encoder, frame);
     }
 }
 
@@ -428,7 +483,7 @@ impl FrameRenderer for WgpuRenderer {
 /// se corrige aún: la imagen se estira al tamaño de la pantalla (decisión
 /// pendiente para el manifiesto de `.wallpaper`: cover/contain/estirar).
 pub struct ImageRenderer {
-    ctx: GpuContext,
+    surface: SurfaceCtx,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
 }
@@ -438,7 +493,7 @@ impl ImageRenderer {
     ///
     /// # Safety
     ///
-    /// Igual que [`GpuContext::new_wayland`]: los punteros deben ser
+    /// Igual que [`SurfaceCtx::new_wayland`]: los punteros deben ser
     /// válidos y sobrevivir a la superficie; el caller garantiza el orden
     /// de dropeo conexión > renderer.
     pub unsafe fn new_wayland(
@@ -446,7 +501,24 @@ impl ImageRenderer {
         surface_ptr: NonNull<std::ffi::c_void>,
         image_path: &Path,
     ) -> Result<Self, RendererError> {
-        let ctx = unsafe { GpuContext::new_wayland(display_ptr, surface_ptr)? };
+        let shared = GpuShared::new()?;
+        unsafe { Self::on_shared(&shared, display_ptr, surface_ptr, image_path) }
+    }
+
+    /// Crea el renderer de imagen sobre GPU compartida (Fase 5:
+    /// multi-salida): la textura se sube por salida (es pequeña al lado
+    /// del device duplicado que evitamos).
+    ///
+    /// # Safety
+    ///
+    /// Igual que [`SurfaceCtx::new_wayland`].
+    pub unsafe fn on_shared(
+        shared: &GpuShared,
+        display_ptr: NonNull<std::ffi::c_void>,
+        surface_ptr: NonNull<std::ffi::c_void>,
+        image_path: &Path,
+    ) -> Result<Self, RendererError> {
+        let ctx = unsafe { SurfaceCtx::new_wayland(shared, display_ptr, surface_ptr)? };
 
         let img = image::open(image_path).map_err(|e| RendererError::Image(e.to_string()))?;
         let rgba = img.to_rgba8();
@@ -570,7 +642,7 @@ impl ImageRenderer {
                     entry_point: Some("fs_main"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: ctx.surface_format(),
+                        format: ctx.format(),
                         blend: Some(wgpu::BlendState::REPLACE),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -590,7 +662,7 @@ impl ImageRenderer {
             });
 
         Ok(Self {
-            ctx,
+            surface: ctx,
             pipeline,
             bind_group,
         })
@@ -602,8 +674,8 @@ impl FrameRenderer for ImageRenderer {
         if width == 0 || height == 0 {
             return;
         }
-        self.ctx.configure(width, height);
-        let Some(frame) = self.ctx.acquire_frame() else {
+        self.surface.configure(width, height);
+        let Some(frame) = self.surface.acquire_frame() else {
             return;
         };
 
@@ -611,7 +683,7 @@ impl FrameRenderer for ImageRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder =
-            self.ctx
+            self.surface
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("bruma-image-frame"),
@@ -639,7 +711,7 @@ impl FrameRenderer for ImageRenderer {
             pass.draw(0..4, 0..1);
         }
 
-        self.ctx.submit_and_present(encoder, frame);
+        self.surface.submit_and_present(encoder, frame);
     }
 }
 
@@ -689,7 +761,7 @@ type ReloadCallback = Box<dyn FnMut(&ReloadEvent)>;
 ///   wallpaper: se conserva el pipeline anterior y se reporta por log
 ///   (el próximo archivo válido se aplicará solo).
 pub struct AnimatedRenderer {
-    ctx: GpuContext,
+    ctx: SurfaceCtx,
     /// Ruta del shader y último mtime visto (para el hot-reload).
     shader_path: PathBuf,
     last_mtime: Option<std::time::SystemTime>,
@@ -731,7 +803,7 @@ impl AnimatedRenderer {
     ///
     /// # Safety
     ///
-    /// Igual que [`GpuContext::new_wayland`]: los punteros deben ser
+    /// Igual que [`SurfaceCtx::new_wayland`]: los punteros deben ser
     /// válidos y sobrevivir a la superficie; el caller garantiza el orden
     /// de dropeo conexión > renderer.
     ///
@@ -745,7 +817,24 @@ impl AnimatedRenderer {
         surface_ptr: NonNull<std::ffi::c_void>,
         shader_path: &Path,
     ) -> Result<Self, RendererError> {
-        let ctx = unsafe { GpuContext::new_wayland(display_ptr, surface_ptr)? };
+        let shared = GpuShared::new()?;
+        unsafe { Self::on_shared(&shared, display_ptr, surface_ptr, shader_path) }
+    }
+
+    /// Crea el renderer animado sobre GPU compartida (Fase 5: una GPU
+    /// sirve a todas las salidas; cada salida tiene su superficie, sus
+    /// uniforms y su pipeline — los pipelines son baratos, el device no).
+    ///
+    /// # Safety
+    ///
+    /// Igual que [`SurfaceCtx::new_wayland`].
+    pub unsafe fn on_shared(
+        shared: &GpuShared,
+        display_ptr: NonNull<std::ffi::c_void>,
+        surface_ptr: NonNull<std::ffi::c_void>,
+        shader_path: &Path,
+    ) -> Result<Self, RendererError> {
+        let ctx = unsafe { SurfaceCtx::new_wayland(shared, display_ptr, surface_ptr)? };
 
         let source =
             std::fs::read_to_string(shader_path).map_err(|source| RendererError::ShaderIo {
@@ -819,7 +908,7 @@ impl AnimatedRenderer {
     /// Compila el shader y construye el pipeline con el layout estándar de
     /// bruma (uniform block en group 0, binding 0).
     fn build_pipeline(
-        ctx: &GpuContext,
+        ctx: &SurfaceCtx,
         source: &str,
         bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Result<wgpu::RenderPipeline, RendererError> {
@@ -827,7 +916,7 @@ impl AnimatedRenderer {
 
         Ok(build_quad_pipeline(
             ctx.device(),
-            ctx.surface_format(),
+            ctx.format(),
             &shader,
             bind_group_layout,
         ))

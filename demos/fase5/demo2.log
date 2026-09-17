@@ -1,0 +1,17 @@
+[bruma] INFO: paquete 'Onda bruma (demo)' 0.1.0 — /home/abstem/.local/share/bruma/wallpapers/onda-bruma-demo/0.1.0
+[bruma] INFO: bruma run — modo shader animado (30 fps)
+[bruma] ERROR: GENERAL [Loader Message (0x0)]
+	liblsfg-vk-layer.x86.so: cannot open shared object file: No such file or directory
+[bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x55922fa07e10, name: ?)
+[bruma] ERROR: GENERAL [Loader Message (0x0)]
+	loader_create_instance_chain: Failed to find 'vkGetInstanceProcAddr' in layer "liblsfg-vk-layer.so"
+[bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x55922fa07e10, name: ?)
+[bruma] INFO: Found 6 cooperative matrix configurations supported by wgpu
+[bruma] ERROR: GENERAL [Loader Message (0x0)]
+	loader_create_device_chain: Failed to find 'vkGetInstanceProcAddr' in layer "liblsfg-vk-layer.so".  Skipping layer.
+[bruma] ERROR: 	objects: (type: INSTANCE, hndl: 0x55922fa07e10, name: ?)
+[bruma] INFO: wgpu: adaptador AMD Radeon 660M (RADV REMBRANDT) (IntegratedGpu), backend Vulkan (compartido entre salidas)
+[bruma] INFO: superficie de fondo creada en salida Some("eDP-1")
+[bruma] INFO: superficie de fondo creada en salida Some("HDMI-A-1")
+[bruma] INFO: fondo activo en Some("eDP-1"): 1920x1200px (gpu) — Ctrl-C para salir
+[bruma] INFO: fondo activo en Some("HDMI-A-1"): 2560x1440px (gpu) — Ctrl-C para salir

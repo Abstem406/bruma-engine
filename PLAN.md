@@ -89,9 +89,23 @@
   que ordena el directorio de instalación `~/.local/share/bruma/
   wallpapers/NOMBRE/VERSION`).
 
-### Fase 5 — Escritorio completo (4-8 semanas)
-- Multi-monitor con wallpaper por pantalla, DPI por salida.
-- Config persistente; pausa en fullscreen/bloqueo/batería.
+### Fase 5 — Escritorio completo (4-8 semanas) — en curso
+- ✅ Multi-monitor: UNA superficie layer-shell por salida (con output
+  concreto en `create_layer_surface`), creada en hotplug (`new_output`),
+  destruida al retirar la salida (`output_destroyed`/`closed`).
+- ✅ GPU compartida (`GpuShared`, device/queue clonables) + `SurfaceCtx`
+  por salida (formato de swapchain elegido por salida); factory de
+  renderers inyectada desde la CLI (la plataforma no conoce GPU).
+- ✅ Demo verificada en niri: eDP-1 1920x1200 + HDMI-A-1 2560x1440 con
+  el mismo shader animado (AMD 660M por Vulkan), animación por píxeles
+  en ambas, supervivencia a recarga de config y ciclo DPMS.
+- ✅ FIX de bug latente (desde Fase 3): tras dibujar, el bucle esperaba
+  eventos indefinidamente — la animación avanzaba solo con eventos del
+  compositor (enmascarado por el tráfico del escritorio). Ahora el
+  deadline SIEMPRE acota el poll; CPU medida con escritorio quieto:
+  ~5.3% de un núcleo por dos salidas a 30 fps (~2.6% por salida).
+- Pendiente en la fase: DPI/escala por salida, wallpaper distinto por
+  pantalla, config persistente, pausa en fullscreen/bloqueo/batería.
 - Compatibilidad verificada: niri (referencia), Hyprland, sway, KWin.
 - GNOME/Mutter sigue siendo non-goal en v1.
 

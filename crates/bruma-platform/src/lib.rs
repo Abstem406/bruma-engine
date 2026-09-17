@@ -1,21 +1,23 @@
 //! # bruma-platform
 //!
-//! Capa de plataforma: ventana de fondo en Wayland vía `wlr-layer-shell`.
+//! Capa de plataforma: ventanas de fondo en Wayland vía `wlr-layer-shell`.
 //!
-//! Estado: **Fase 3**. Implementación con `smithay-client-toolkit` 0.21
+//! Estado: **Fase 5**. Implementación con `smithay-client-toolkit` 0.20
 //! (NO winit: no soporta layer-shell), igual que swww. El banco de pruebas
 //! de referencia es **niri** (+ DankMaterialShell), con el resto de
 //! compositors wlroots/KWin como best-effort.
 //!
+//! Hay **una superficie de fondo por salida conectada** (Fase 5): una
+//! superficie sin output concreto solo cubre una pantalla en la mayoría
+//! de compositors. Las superficies nacen con el hotplug de salidas
+//! (`new_output`), mueren con él (`output_destroyed`/`closed`) y el
+//! renderizador de cada una lo decide una **factory** inyectada desde la
+//! CLI (la plataforma no conoce GPU: frontera D3/D6).
+//!
 //! El bucle de eventos tiene dos modos: `run` (solo eventos Wayland; la
 //! CPU queda idle con contenido estático) y `run_with_runtime` (conduce
 //! además la animación al ritmo que pida el `WallpaperRuntime`, durmiendo
-//! en `poll` sobre el socket — nunca spin).
-//!
-//! Demo de la fase: un rectángulo de color sólido detrás de todas las
-//! ventanas, anclado a los cuatro bordes, que sobrevive a recargas de
-//! configuración y a reconexiones de salida (el compositor re-configura
-//! la superficie y aquí se redibuja).
+//! en `poll` sobre el socket — nunca spin) pintando TODAS las salidas.
 //!
 //! NON-GOALS (ver DECISIONS.md): GNOME/Mutter en v1 (sin layer-shell);
 //! vídeo y audio en v1.
@@ -52,11 +54,12 @@ use wayland_client::{
     protocol::{wl_output, wl_shm, wl_surface},
 };
 
-/// Una ventana de fondo a pantalla completa detrás de todas las ventanas.
+/// Una ventana de fondo detrás de todas las ventanas, **una por salida**.
 ///
-/// Tipo de alto nivel para el CLI: se construye con un color y el bucle de
-/// eventos mantiene la ventana viva, redibujando en cada re-configuración
-/// del compositor (recarga de config, cambio de resolución, etc.).
+/// Tipo de alto nivel para el CLI: construye una superficie por cada
+/// salida conocida (y por las que se conecten después), y el bucle de
+/// eventos las mantiene vivas, redibujando en cada re-configuración del
+/// compositor (recarga de config, cambio de resolución, etc.).
 pub struct BackgroundWindow {
     /// Manija de la conexión (Arc interno): necesaria para `display_ptr`,
     /// el fd del socket y roundtrips del CLI.
@@ -70,27 +73,67 @@ pub struct BackgroundWindow {
 struct BackgroundState {
     registry_state: RegistryState,
     output_state: OutputState,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
     shm: Shm,
     pool: SlotPool,
-    layer: LayerSurface,
     color: Color,
-    width: u32,
-    height: u32,
-    configure_seen: bool,
     closed: bool,
-    /// Renderizador de frames (Fase 2). Si hay uno, pinta él; si no,
-    /// se usa el fallback de color sólido de la Fase 1.
-    renderer: Option<Box<dyn FrameRenderer>>,
-    /// Salidas conocidas; una entrada por pantalla conectada (Fase 5).
-    outputs: Vec<OutputInfo>,
+    /// Una entrada por salida conectada (Fase 5). Cada una con su propia
+    /// superficie layer-shell, tamaño y renderizador.
+    outputs: Vec<OutputEntry>,
+    /// Factory de renderers por superficie (Fase 5). La inyecta el CLI;
+    /// la plataforma solo la llama con los punteros crudos de la nueva
+    /// superficie — no sabe nada de GPU (D3/D6).
+    factory: Option<SurfaceRendererFactory>,
 }
 
-/// Información mínima de una salida conectada (Fase 1: solo logging;
-/// Fase 5: wallpaper por pantalla con posición y escala).
+/// Una superficie de fondo en una salida concreta.
+struct OutputEntry {
+    /// Proxy de la salida (para casar `update_output`/`output_destroyed`
+    /// con su entrada).
+    output: wl_output::WlOutput,
+    /// Info declarativa (nombre, tamaño lógico) para logs y API.
+    info: OutputInfo,
+    layer: LayerSurface,
+    width: u32,
+    height: u32,
+    configured: bool,
+    /// Renderer de ESTA salida (construido por la factory). `None` si la
+    /// factory falló o no hay factory: fallback de color sólido.
+    renderer: Option<Box<dyn FrameRenderer>>,
+}
+
+/// Información mínima de una salida conectada.
 #[derive(Debug, Clone)]
 pub struct OutputInfo {
     pub name: Option<String>,
     pub logical_size: Option<(i32, i32)>,
+}
+
+/// Punteros crudos + identidad de una superficie de fondo recién creada.
+/// Es lo único que la plataforma le pasa a la factory: con esto (y el
+/// nombre de la salida) el CLI puede construir su renderer.
+pub struct OutputSurfaceHandles {
+    pub display_ptr: NonNull<std::ffi::c_void>,
+    pub surface_ptr: NonNull<std::ffi::c_void>,
+    pub output_name: Option<String>,
+}
+
+/// Factory de renderers por superficie. Devuelve `Err` con el motivo si
+/// no se pudo construir; esa salida degrada a color sólido (con log) y
+/// las demás siguen — un escritorio con N pantallas no muere por una.
+pub type SurfaceRendererFactory =
+    Box<dyn FnMut(&OutputSurfaceHandles) -> Result<Box<dyn FrameRenderer>, String>>;
+
+/// Reporte de una salida tras el arranque (para el log del CLI).
+#[derive(Debug, Clone)]
+pub struct OutputReport {
+    pub name: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    /// ¿Tiene renderer de la factory (true) o fallback de color (false)?
+    pub gpu: bool,
 }
 
 /// Errores de la capa de plataforma.
@@ -113,6 +156,9 @@ pub enum PlatformError {
     /// El compositor nunca configuró la superficie.
     #[error("el compositor nunca configuró la superficie de fondo")]
     NotConfigured,
+    /// No hay ninguna salida conectada.
+    #[error("no hay ninguna salida conectada")]
+    NoOutputs,
     /// Error de despacho de eventos.
     #[error("error en el bucle de eventos: {0}")]
     Dispatch(#[from] wayland_client::DispatchError),
@@ -122,8 +168,10 @@ pub enum PlatformError {
 }
 
 impl BackgroundWindow {
-    /// Conecta al compositor (vía entorno) y crea la ventana de fondo en
-    /// la capa `Background` de Wayland.
+    /// Conecta al compositor (vía entorno) y prepara el fondo. Las
+    /// superficies por salida se crean solas en el primer roundtrip
+    /// (`new_output`), ya con la factory instalada si se instala ANTES
+    /// del primer `present_once`.
     pub fn new(color: Color) -> Result<Self, PlatformError> {
         let conn =
             Connection::connect_to_env().map_err(|e| PlatformError::Connect(e.to_string()))?;
@@ -136,32 +184,13 @@ impl BackgroundWindow {
             registry_queue_init(&conn).map_err(|e| PlatformError::Connect(e.to_string()))?;
         let qh = event_queue.handle();
 
-        let compositor_state = CompositorState::bind(&globals, &qh)
+        // Los estados de protocolo viven en el estado: `new_output` los
+        // necesita para crear superficies en caliente (hotplug).
+        let compositor = CompositorState::bind(&globals, &qh)
             .map_err(|_| PlatformError::MissingProtocol("wl_compositor"))?;
         let layer_shell = LayerShell::bind(&globals, &qh)
             .map_err(|_| PlatformError::MissingProtocol("zwlr_layer_shell_v1"))?;
         let shm = Shm::bind(&globals, &qh).map_err(|_| PlatformError::MissingProtocol("wl_shm"))?;
-
-        let surface = compositor_state.create_surface(&qh);
-        let layer = layer_shell.create_layer_surface(
-            &qh,
-            surface,
-            Layer::Background,
-            Some("bruma"),
-            None, // sin output concreto: cubre todas las pantallas (Fase 5 lo refinará)
-        );
-
-        // Anclada a los cuatro bordes => ocupa la pantalla completa; el
-        // tamaño lo impone el compositor en el configure (se pide 0,0).
-        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-        layer.set_exclusive_zone(-1);
-        layer.set_size(0, 0);
-        // Un wallpaper no debe robar el teclado ni el puntero.
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-
-        // Commit inicial sin buffer: el compositor responde con un
-        // configure que nos da el tamaño real de pantalla.
-        layer.commit();
 
         let pool =
             SlotPool::new(64 * 64 * 4, &shm).map_err(|e| PlatformError::Shm(e.to_string()))?;
@@ -172,40 +201,59 @@ impl BackgroundWindow {
             state: BackgroundState {
                 registry_state: RegistryState::new(&globals),
                 output_state: OutputState::new(&globals, &qh),
+                compositor,
+                layer_shell,
                 shm,
                 pool,
-                layer,
                 color,
-                width: 0,
-                height: 0,
-                configure_seen: false,
                 closed: false,
-                renderer: None,
                 outputs: Vec::new(),
+                factory: None,
             },
         })
     }
 
-    /// Instala el renderizador de frames (contrato de
-    /// `bruma-renderer`). A partir de entonces pinta él en cada
-    /// re-configuración, en vez del color sólido de la Fase 1.
-    pub fn set_frame_renderer(&mut self, renderer: Box<dyn FrameRenderer>) {
-        self.state.renderer = Some(renderer);
+    /// Instala la factory de renderers por superficie (Fase 5). Debe
+    /// llamarse ANTES del primer `present_once` para que las superficies
+    /// del arranque nazcan ya con su renderer.
+    pub fn set_renderer_factory(&mut self, factory: SurfaceRendererFactory) {
+        self.state.factory = Some(factory);
     }
 
-    /// ¿El renderer instalado produce contenido animado? Lo consulta el
-    /// CLI para elegir entre `run` y `run_with_runtime`.
+    /// Instala UN renderer compartido por todas las salidas... no se puede:
+    /// cada salida necesita su propia superficie GPU. Este método es el
+    /// reemplazo del antiguo `set_frame_renderer`: envuelve al renderer
+    /// dado en una factory que clona el modelo de construcción.
+    ///
+    /// NOTA: `FrameRenderer` no es `Clone`; la factory solo tiene sentido
+    /// construyendo un renderer NUEVO por superficie (por eso existe
+    /// [`Self::set_renderer_factory`]).
+    pub fn set_frame_renderer(&mut self, renderer: Box<dyn FrameRenderer>) {
+        // Degradación honesta: el primer output recibe el renderer tal
+        // cual (backward compat con las fases 1-4); los demás quedan en
+        // color sólido con un warning claro.
+        let mut taken = Some(renderer);
+        self.state.factory = Some(Box::new(move |_handles| {
+            if let Some(r) = taken.take() {
+                Ok(r)
+            } else {
+                Err("set_frame_renderer solo provee un renderer: \
+                     usa set_renderer_factory para multi-salida"
+                    .to_owned())
+            }
+        }));
+    }
+
+    /// ¿Algún renderer instalado produce contenido animado? Lo consulta
+    /// el CLI para elegir entre `run` y `run_with_runtime`.
     pub fn wants_animation(&self) -> bool {
         self.state
-            .renderer
-            .as_ref()
-            .is_some_and(|r| r.wants_animation())
+            .outputs
+            .iter()
+            .any(|o| o.renderer.as_ref().is_some_and(|r| r.wants_animation()))
     }
 
     /// Puntero crudo al `wl_display` de la conexión.
-    ///
-    /// Para crear la superficie de wgpu (`WgpuRenderer::new_wayland`). El
-    /// puntero es válido mientras `BackgroundWindow` viva.
     pub fn display_ptr(&self) -> NonNull<std::ffi::c_void> {
         // En libwayland `wl_display` ES un `wl_proxy` (el mismo puntero);
         // el cast a c_void es lo que esperan wgpu/Vulkan.
@@ -213,45 +261,51 @@ impl BackgroundWindow {
         NonNull::new(ptr).expect("wl_display vivo").cast()
     }
 
-    /// Puntero crudo al `wl_surface` de la ventana de fondo.
-    pub fn surface_ptr(&self) -> NonNull<std::ffi::c_void> {
-        let ptr = self.state.layer.wl_surface().id().as_ptr();
-        NonNull::new(ptr).expect("wl_surface vivo").cast()
-    }
-
     /// Cambia el color de fondo; surte efecto en el próximo redibujo.
     pub fn set_color(&mut self, color: Color) {
         self.state.color = color;
     }
 
-    /// Tamaño (buffer) del último configure recibido.
-    pub fn size(&self) -> (u32, u32) {
-        (self.state.width, self.state.height)
-    }
-
     /// Pantallas detectadas hasta ahora.
-    pub fn outputs(&self) -> &[OutputInfo] {
-        &self.state.outputs
+    pub fn outputs(&self) -> Vec<OutputInfo> {
+        self.state.outputs.iter().map(|o| o.info.clone()).collect()
     }
 
-    /// Procesa eventos hasta dibujar el primer frame. Pensado para tests y
-    /// verificación: espera el configure inicial y confirma que hay un
-    /// buffer committeado, sin bloquearse indefinidamente.
-    pub fn present_once(&mut self) -> Result<(u32, u32), PlatformError> {
+    /// Procesa eventos hasta que TODAS las salidas conocidas estén
+    /// configuradas. Devuelve un reporte por salida (tamaño y si pinta
+    /// con GPU o con el fallback de color).
+    pub fn present_once(&mut self) -> Result<Vec<OutputReport>, PlatformError> {
+        // Primer roundtrip: globals + creación de superficies + configures.
         self.event_queue.roundtrip(&mut self.state)?;
         if self.state.closed {
             return Err(PlatformError::SurfaceClosed);
         }
-        if !self.state.configure_seen || self.state.width == 0 {
+        // Los outputs pueden seguir llegando (hotplug temprano); los
+        // recién llegados necesitan su configure. Un roundtrip extra
+        // drena los pendientes.
+        self.event_queue.roundtrip(&mut self.state)?;
+        if self.state.outputs.is_empty() {
+            return Err(PlatformError::NoOutputs);
+        }
+        let reports: Vec<OutputReport> = self
+            .state
+            .outputs
+            .iter()
+            .map(|o| OutputReport {
+                name: o.info.name.clone(),
+                width: o.width,
+                height: o.height,
+                gpu: o.renderer.is_some(),
+            })
+            .collect();
+        if reports.iter().any(|r| r.width == 0) {
             return Err(PlatformError::NotConfigured);
         }
-        // Segundo roundtrip: drena enteros/frame events pendientes.
-        self.event_queue.roundtrip(&mut self.state)?;
-        Ok((self.state.width, self.state.height))
+        Ok(reports)
     }
 
-    /// Ejecuta el bucle de eventos hasta que el compositor cierre la
-    /// ventana. Ctrl-C termina el proceso (comportamiento por defecto).
+    /// Ejecuta el bucle de eventos hasta que el compositor cierre el
+    /// fondo. Ctrl-C termina el proceso (comportamiento por defecto).
     ///
     /// Modo estático: solo atiende eventos Wayland (configure, frame
     /// callbacks...); entre eventos, `blocking_dispatch` duerme sin girar
@@ -264,7 +318,7 @@ impl BackgroundWindow {
     }
 
     /// Igual que [`Self::run`], pero conduciendo además la animación con
-    /// el runtime dado (Fase 3).
+    /// el runtime dado (Fase 3) en TODAS las salidas (Fase 5).
     ///
     /// El ritmo lo dicta el runtime: en cada iteración se le pregunta si
     /// toca dibujar ([`WallpaperRuntime::begin_frame`]); si no, el bucle
@@ -275,27 +329,46 @@ impl BackgroundWindow {
         runtime: &mut dyn WallpaperRuntime,
     ) -> Result<(), PlatformError> {
         while !self.state.closed {
-            match runtime.begin_frame(Instant::now()) {
+            // Deadline del despertar: SIEMPRE acotado. Tras dibujar, el
+            // segundo begin_frame devuelve Skip con el deadline del
+            // próximo tick (no toca el tiempo: now-last < interval).
+            // Sin esto, el poll tras el Draw sería indefinido y la
+            // animación solo avanzaría con eventos del compositor — bug
+            // latente desde la Fase 3, enmascarado por el tráfico
+            // constante de un escritorio en uso.
+            let deadline = match runtime.begin_frame(Instant::now()) {
                 FrameDecision::Draw => {
-                    // La resolución real la impone la superficie (último
-                    // configure); el runtime aporta tiempo, mouse y
-                    // parámetros. Así los uniforms siempre cuadran con el
-                    // tamaño del target, incluso tras un re-configure.
+                    // La resolución real la impone cada superficie (su
+                    // último configure); el runtime aporta tiempo, mouse
+                    // y parámetros. Un frame de runtime pinta todas las
+                    // salidas con el MISMO instante: la animación va
+                    // sincronizada entre monitores.
                     let mut st = runtime.state();
-                    st.width = self.state.width;
-                    st.height = self.state.height;
-                    match self.state.renderer.as_mut() {
-                        Some(renderer) => renderer.render_animated(&st),
-                        None => self.state.draw_solid(),
+                    for idx in 0..self.state.outputs.len() {
+                        let (w, h) = (
+                            self.state.outputs[idx].width,
+                            self.state.outputs[idx].height,
+                        );
+                        if w == 0 || h == 0 {
+                            continue;
+                        }
+                        st.width = w;
+                        st.height = h;
+                        match self.state.outputs[idx].renderer.as_mut() {
+                            Some(renderer) => renderer.render_animated(&st),
+                            None => self.state.draw_entry_solid(idx),
+                        }
                     }
-                    // El redibujo puede haber vencido al deadline: no
-                    // duplicar wakeup en esta iteración.
-                    self.wait_and_dispatch(None)?;
+                    match runtime.begin_frame(Instant::now()) {
+                        FrameDecision::Skip { deadline } => Some(deadline),
+                        // Sin límite de fps (runtime exótico): cede el
+                        // hilo con timeout 0 en vez de girar en seco.
+                        FrameDecision::Draw => Some(Instant::now()),
+                    }
                 }
-                FrameDecision::Skip { deadline } => {
-                    self.wait_and_dispatch(Some(deadline))?;
-                }
-            }
+                FrameDecision::Skip { deadline } => Some(deadline),
+            };
+            self.wait_and_dispatch(deadline)?;
         }
         Ok(())
     }
@@ -356,15 +429,111 @@ impl BackgroundWindow {
 }
 
 impl BackgroundState {
-    /// Fallback de la Fase 1: rellena un buffer ARGB8888 del color
-    /// actual, lo daña y lo committea. Se usa cuando no hay renderer.
-    fn draw_solid(&mut self) {
-        let (width, height) = (self.width, self.height);
+    /// Ciclo completo de alta de una salida: superficie layer-shell,
+    /// renderer vía factory (con los punteros reales ya creados) y
+    /// registro. El renderer se construye ANTES del primer configure
+    /// para que pinte él el primer frame (patrón de las fases 2-4).
+    fn create_surface_for_output(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        output: &wl_output::WlOutput,
+    ) {
+        let info = self.output_state.info(output);
+        let entry_info = OutputInfo {
+            name: info.as_ref().and_then(|i| i.name.clone()),
+            logical_size: info.as_ref().and_then(|i| i.logical_size),
+        };
+
+        let surface = self.compositor.create_surface(qh);
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            surface,
+            Layer::Background,
+            Some("bruma"),
+            Some(output), // << LA salida concreta (clave de la Fase 5)
+        );
+        // Anclada a los cuatro bordes => ocupa la pantalla completa; el
+        // tamaño lo impone el compositor en el configure (se pide 0,0).
+        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        layer.set_exclusive_zone(-1);
+        layer.set_size(0, 0);
+        // Un wallpaper no debe robar el teclado ni el puntero.
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.commit();
+
+        // Renderer por salida, con los punteros crudos de LA superficie
+        // recién creada. Error de factory = color sólido (con log): un
+        // escritorio de N pantallas no muere por una.
+        let renderer = self.build_renderer(conn, &layer, output);
+
+        log::info!("superficie de fondo creada en salida {:?}", entry_info.name);
+        self.outputs.push(OutputEntry {
+            output: output.clone(),
+            info: entry_info,
+            layer,
+            width: 0,
+            height: 0,
+            configured: false,
+            renderer,
+        });
+    }
+
+    /// Construye el renderer de una salida vía factory (si hay).
+    fn build_renderer(
+        &mut self,
+        conn: &Connection,
+        layer: &LayerSurface,
+        output: &wl_output::WlOutput,
+    ) -> Option<Box<dyn FrameRenderer>> {
+        let factory = self.factory.as_mut()?;
+        let display_ptr = {
+            let ptr = conn.backend().display_id().as_ptr();
+            NonNull::new(ptr).expect("wl_display vivo").cast()
+        };
+        let surface_ptr = {
+            let ptr = layer.wl_surface().id().as_ptr();
+            NonNull::new(ptr).expect("wl_surface vivo").cast()
+        };
+        let info = self.output_state.info(output);
+        let handles = OutputSurfaceHandles {
+            display_ptr,
+            surface_ptr,
+            output_name: info.as_ref().and_then(|i| i.name.clone()),
+        };
+        match factory(&handles) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                log::warn!(
+                    "salida {:?} sin renderer GPU (fallback a color): {e}",
+                    handles.output_name
+                );
+                None
+            }
+        }
+    }
+
+    /// Busca la entrada dueña de una superficie layer-shell.
+    fn entry_by_surface(&mut self, surface: &wl_surface::WlSurface) -> Option<usize> {
+        self.outputs
+            .iter()
+            .position(|o| o.layer.wl_surface().id() == surface.id())
+    }
+
+    /// Fallback de la Fase 1: rellena un buffer ARGB8888 del color dado,
+    /// lo daña y lo committea, para la entrada indicada.
+    fn draw_solid_entry(
+        entry: &mut OutputEntry,
+        pool: &mut SlotPool,
+        width: u32,
+        height: u32,
+        color: &Color,
+    ) {
         if width == 0 || height == 0 {
             return;
         }
         let stride = width as i32 * 4;
-        let Ok((buffer, canvas)) = self.pool.create_buffer(
+        let Ok((buffer, canvas)) = pool.create_buffer(
             width as i32,
             height as i32,
             stride,
@@ -373,15 +542,37 @@ impl BackgroundState {
             log::error!("no se pudo crear buffer {width}x{height}");
             return;
         }; // ARGB8888 en memoria nativa little-endian => bytes B,G,R,A.
-        let px = [self.color.b, self.color.g, self.color.r, self.color.a];
+        let px = [color.b, color.g, color.r, color.a];
         canvas.as_chunks_mut::<4>().0.iter_mut().for_each(|chunk| {
             *chunk = px;
         });
 
-        let surface = self.layer.wl_surface();
+        let surface = entry.layer.wl_surface();
         surface.damage_buffer(0, 0, width as i32, height as i32);
         buffer.attach_to(surface).expect("attach buffer");
-        self.layer.commit();
+        entry.layer.commit();
+    }
+
+    /// Dibuja una entrada (renderer si hay; color si no).
+    fn draw_entry(&mut self, idx: usize) {
+        let (w, h) = (self.outputs[idx].width, self.outputs[idx].height);
+        if w == 0 || h == 0 {
+            return;
+        }
+        if self.outputs[idx].renderer.is_some() {
+            let renderer = self.outputs[idx].renderer.as_mut().unwrap();
+            renderer.render_frame(w, h);
+        } else {
+            self.draw_entry_solid(idx);
+        }
+    }
+
+    /// Fallback de color para la entrada idx (usar cuando NO hay renderer).
+    fn draw_entry_solid(&mut self, idx: usize) {
+        let (w, h) = (self.outputs[idx].width, self.outputs[idx].height);
+        let color = self.color;
+        let entry = &mut self.outputs[idx];
+        Self::draw_solid_entry(entry, &mut self.pool, w, h, &color);
     }
 }
 
@@ -393,8 +584,8 @@ impl CompositorHandler for BackgroundState {
         _surface: &wl_surface::WlSurface,
         _new_factor: i32,
     ) {
-        // Fase 5: redimensionar buffers por DPI. Con shm el factor no
-        // afecta al tamaño en píxeles del buffer lógico completo.
+        // Fase 5 (futuro): redimensionar buffers por DPI. Con shm el
+        // factor no afecta al tamaño en píxeles del buffer lógico.
     }
 
     fn transform_changed(
@@ -404,7 +595,7 @@ impl CompositorHandler for BackgroundState {
         _surface: &wl_surface::WlSurface,
         _new_transform: wl_output::Transform,
     ) {
-        // Fase 5: rotación de salida.
+        // Fase 5 (futuro): rotación de salida.
     }
 
     fn frame(
@@ -414,8 +605,8 @@ impl CompositorHandler for BackgroundState {
         _surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
-        // Fase 1: color estático, no se anima; los frame callbacks solo
-        // llegarían si los solicitáramos (llegará con wgpu en Fase 2).
+        // El color estático no anima; el renderer wgpu presenta por su
+        // cuenta (no pide frame callbacks del compositor).
     }
 
     fn surface_enter(
@@ -423,17 +614,10 @@ impl CompositorHandler for BackgroundState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
-        output: &wl_output::WlOutput,
+        _output: &wl_output::WlOutput,
     ) {
-        let info = self.output_state.info(output);
-        let entry = OutputInfo {
-            name: info.as_ref().and_then(|i| i.name.clone()),
-            logical_size: info.as_ref().and_then(|i| i.logical_size),
-        };
-        log::info!("ventana de fondo entra en salida {entry:?}");
-        if !self.outputs.iter().any(|o| o.name == entry.name) {
-            self.outputs.push(entry);
-        }
+        // Con una superficie por salida, `enter` es trivialmente la suya.
+        // El log de salidas vive en `create_surface_for_output`.
     }
 
     fn surface_leave(
@@ -453,56 +637,102 @@ impl OutputHandler for BackgroundState {
 
     fn new_output(
         &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
     ) {
-        // Fase 5: crear una ventana de fondo por salida.
+        // HOTPLUG (Fase 5): nueva salida => nueva superficie de fondo.
+        self.create_surface_for_output(conn, qh, &output);
     }
 
     fn update_output(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        output: wl_output::WlOutput,
     ) {
+        // La info de la salida (nombre/tamaño) llegó o cambió.
+        let info = self.output_state.info(&output);
+        let new_info = OutputInfo {
+            name: info.as_ref().and_then(|i| i.name.clone()),
+            logical_size: info.as_ref().and_then(|i| i.logical_size),
+        };
+        if let Some(entry) = self
+            .outputs
+            .iter_mut()
+            .find(|o| o.output.id() == output.id())
+        {
+            if entry.info.name != new_info.name {
+                log::info!(
+                    "salida renombrada: {:?} → {:?}",
+                    entry.info.name,
+                    new_info.name
+                );
+            }
+            entry.info = new_info;
+        }
     }
 
     fn output_destroyed(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        output: wl_output::WlOutput,
     ) {
+        // HOTPLUG: la salida se fue => su superficie se destruye con ella.
+        let before = self.outputs.len();
+        self.outputs.retain(|o| o.output.id() != output.id());
+        if self.outputs.len() != before {
+            log::info!(
+                "salida retirada; superficies restantes: {}",
+                self.outputs.len()
+            );
+        }
+        if self.outputs.is_empty() {
+            log::info!("sin salidas: el fondo termina");
+            self.closed = true;
+        }
     }
 }
 
 impl LayerShellHandler for BackgroundState {
-    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
-        log::info!("el compositor cerró la ventana de fondo");
-        self.closed = true;
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
+        // El compositor cerró UNA superficie (p. ej. la salida se fue).
+        if let Some(idx) = self.entry_by_surface(layer.wl_surface()) {
+            let name = self.outputs[idx].info.name.clone();
+            self.outputs.remove(idx);
+            log::info!(
+                "superficie cerrada por el compositor ({name:?}); restantes: {}",
+                self.outputs.len()
+            );
+        }
+        if self.outputs.is_empty() {
+            log::info!("el compositor cerró el fondo completo");
+            self.closed = true;
+        }
     }
 
     fn configure(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _layer: &LayerSurface,
+        layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
+        let Some(idx) = self.entry_by_surface(layer.wl_surface()) else {
+            return;
+        };
         let (w, h) = configure.new_size;
         // Con anchor a 4 bordes el tamaño lo impone el compositor; si
         // llegara 0 (no debería), usamos un mínimo digno para no morir.
-        self.width = w.max(1);
-        self.height = h.max(1);
-        self.configure_seen = true;
+        let entry = &mut self.outputs[idx];
+        entry.width = w.max(1);
+        entry.height = h.max(1);
+        entry.configured = true;
         // Redibujar en CADA configure: así sobrevivimos a recargas de
         // configuración de niri y a cambios de resolución de salida.
-        match &mut self.renderer {
-            Some(renderer) => renderer.render_frame(self.width, self.height),
-            None => self.draw_solid(),
-        }
+        self.draw_entry(idx);
     }
 }
 

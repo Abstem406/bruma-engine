@@ -329,3 +329,44 @@ temporalmente → el test FALLÓ en la aserción de cobertura; restaurado
 **Sin GPU (CI):** request_adapter sin superficie y skip con aviso —
 mismo contrato best-effort del proyecto: el CI corre en runners sin
 GPU; en dev corre de lleno.
+
+## 2026-09-16 — Fase 5 (paso 1): multi-monitor, una superficie por salida
+
+**Arquitectura (los tres movimientos):**
+1. `bruma-renderer-wgpu`: `GpuContext` (device+surface acoplados) se
+   divide en `GpuShared` (instance/adapter/device/queue, todos Clone —
+   una sola GPU para N salidas) + `SurfaceCtx` (superficie por salida,
+   formato de swapchain elegido por salida). Los tres renderers ganan
+   `on_shared()`; `new_wayland()` queda como envoltorio de una salida.
+2. `bruma-platform`: `BackgroundState` guarda un `Vec<OutputEntry>`
+   (salida + superficie layer-shell + tamaño + renderer). `new_output`
+   crea superficie con output concreto (la clave: sin output, la
+   superficie solo cubre una pantalla); `output_destroyed`/`closed` la
+   retiran; sin salidas, el fondo termina limpio. La creación de
+   renderers es una **factory inyectada** (`set_renderer_factory`):
+   la plataforma pasa punteros crudos y nombre de salida, no sabe nada
+   de GPU (frontera D3/D6 intacta).
+3. CLI: descubre la GPU una vez (`GpuShared::new()`), la factory
+   construye el renderer por salida sobre ella; el callback de
+   notificaciones de hot-reload se comparte entre salidas.
+
+**Bug latente cazado por la medición honesta:** la CPU de la demo dio
+1 tick/5s — demasiado bajo incluso para dos salidas. Causa: tras el
+Draw, el bucle hacía `wait_and_dispatch(None)` — espera indefinida; el
+avance de la animación dependía de eventos del compositor (un escritorio
+en uso genera miles; uno idle, ninguno → congelación). Existía desde la
+Fase 3. Fix: tras dibujar, un segundo `begin_frame` (que no toca el
+tiempo) entrega el deadline del próximo tick y el poll SIEMPRE queda
+acotado. CPU post-fix con escritorio quieto: 53 ticks/10 s ≈ 5.3% de un
+núcleo por DOS salidas a 30 fps (~2.6% por salida; la Fase 3 medía 4%
+con una).
+
+**Demo verificada en niri** (`demos/fase5/`):
+- Dos superficies: eDP-1 1920x1200 + HDMI-A-1 2560x1440, un solo
+  adaptador (AMD 660M, "compartido entre salidas" en el log).
+- Animación por píxeles en ambas salidas (TL cambia entre capturas;
+  RMSE 0.069 en 0.4 s).
+- Recarga de config de niri: proceso vivo y pintando.
+- Ciclo DPMS completo (power-off/power-on): sobrevive, reconfigura y
+  sigue animando (RMSE 0.023).
+- RAM ~134 MB (una GPU compartida, no dos devices).
