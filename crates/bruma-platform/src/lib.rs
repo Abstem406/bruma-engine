@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 mod notify;
+mod toplevel;
 
 pub use notify::DesktopNotifier;
 
@@ -49,9 +50,13 @@ use smithay_client_toolkit::{
 use std::ptr::NonNull;
 use std::time::Instant;
 use wayland_client::{
-    Connection, EventQueue, Proxy, QueueHandle,
+    Connection, EventQueue, Proxy, QueueHandle, event_created_child,
     globals::registry_queue_init,
     protocol::{wl_output, wl_shm, wl_surface},
+};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1,
+    zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
 };
 
 /// Una ventana de fondo detrás de todas las ventanas, **una por salida**.
@@ -86,13 +91,23 @@ struct BackgroundState {
     /// la plataforma solo la llama con los punteros crudos de la nueva
     /// superficie — no sabe nada de GPU (D3/D6).
     factory: Option<SurfaceRendererFactory>,
+    /// Rastreo de ventanas fullscreen por salida (pausa D12). El bind
+    /// del manager es opcional: sin protocolo, no hay pausa y todo
+    /// sigue como siempre.
+    toplevel: toplevel::ToplevelTracker,
+    /// El manager ligado (si el protocolo existe). Hay que conservarlo
+    /// vivo: al dropearlo el compositor deja de anunciar toplevels.
+    _toplevel_manager: Option<ZwlrForeignToplevelManagerV1>,
+    /// Último estado de pausa por salida (índice del Vec outputs): para
+    /// loggear solo transiciones, no cada frame.
+    last_pause: Vec<bool>,
 }
 
 /// Una superficie de fondo en una salida concreta.
 struct OutputEntry {
     /// Proxy de la salida (para casar `update_output`/`output_destroyed`
-    /// con su entrada).
-    output: wl_output::WlOutput,
+    /// con su entrada, y para consultar el fullscreen del toplevel).
+    output: Option<wl_output::WlOutput>,
     /// Info declarativa (nombre, tamaño lógico) para logs y API.
     info: OutputInfo,
     layer: LayerSurface,
@@ -192,6 +207,18 @@ impl BackgroundWindow {
             .map_err(|_| PlatformError::MissingProtocol("zwlr_layer_shell_v1"))?;
         let shm = Shm::bind(&globals, &qh).map_err(|_| PlatformError::MissingProtocol("wl_shm"))?;
 
+        // Pausa en fullscreen (D12): opcional por protocolo.
+        let toplevel_mgr = globals
+            .bind::<
+                wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1,
+                BackgroundState,
+                (),
+            >(&qh, 1..=3, ())
+            .ok();
+        if toplevel_mgr.is_none() {
+            log::info!("sin wlr-foreign-toplevel: la pausa en fullscreen no está disponible");
+        }
+
         let pool =
             SlotPool::new(64 * 64 * 4, &shm).map_err(|e| PlatformError::Shm(e.to_string()))?;
 
@@ -209,6 +236,9 @@ impl BackgroundWindow {
                 closed: false,
                 outputs: Vec::new(),
                 factory: None,
+                toplevel: toplevel::ToplevelTracker::disabled(),
+                _toplevel_manager: toplevel_mgr,
+                last_pause: Vec::new(),
             },
         })
     }
@@ -343,6 +373,14 @@ impl BackgroundWindow {
                     // y parámetros. Un frame de runtime pinta todas las
                     // salidas con el MISMO instante: la animación va
                     // sincronizada entre monitores.
+                    //
+                    // Pausa por salida (D12): si hay una ventana
+                    // fullscreen sobre la salida, su fondo se congela
+                    // (no se repinta) — el último buffer sigue en
+                    // pantalla a cargo del compositor. Las demás salidas
+                    // siguen animando. El runtime NO se pausa: el tiempo
+                    // global sigue corriendo y al salir del fullscreen
+                    // la animación retoma por donde iba (sin salto).
                     let mut st = runtime.state();
                     for idx in 0..self.state.outputs.len() {
                         let (w, h) = (
@@ -354,6 +392,32 @@ impl BackgroundWindow {
                         }
                         st.width = w;
                         st.height = h;
+                        let fullscreened = self.state.outputs[idx]
+                            .output
+                            .as_ref()
+                            .is_some_and(|o| self.state.toplevel.is_fullscreen_on(o));
+                        // Diagnóstico: log solo en transición (no por frame).
+                        if self
+                            .state
+                            .last_pause
+                            .get(idx)
+                            .is_none_or(|prev| *prev != fullscreened)
+                        {
+                            log::info!(
+                                "salida {:?}: pausa fullscreen = {}",
+                                self.state.outputs[idx].info.name,
+                                fullscreened
+                            );
+                            if idx < self.state.last_pause.len() {
+                                self.state.last_pause[idx] = fullscreened;
+                            } else {
+                                self.state.last_pause.resize(idx + 1, false);
+                                self.state.last_pause[idx] = fullscreened;
+                            }
+                        }
+                        if fullscreened {
+                            continue;
+                        }
                         match self.state.outputs[idx].renderer.as_mut() {
                             Some(renderer) => renderer.render_animated(&st),
                             None => self.state.draw_entry_solid(idx),
@@ -469,7 +533,7 @@ impl BackgroundState {
 
         log::info!("superficie de fondo creada en salida {:?}", entry_info.name);
         self.outputs.push(OutputEntry {
-            output: output.clone(),
+            output: Some(output.clone()),
             info: entry_info,
             layer,
             width: 0,
@@ -660,7 +724,7 @@ impl OutputHandler for BackgroundState {
         if let Some(entry) = self
             .outputs
             .iter_mut()
-            .find(|o| o.output.id() == output.id())
+            .find(|o| o.output.as_ref().is_some_and(|x| x.id() == output.id()))
         {
             if entry.info.name != new_info.name {
                 log::info!(
@@ -681,7 +745,8 @@ impl OutputHandler for BackgroundState {
     ) {
         // HOTPLUG: la salida se fue => su superficie se destruye con ella.
         let before = self.outputs.len();
-        self.outputs.retain(|o| o.output.id() != output.id());
+        self.outputs
+            .retain(|o| o.output.as_ref().is_none_or(|x| x.id() != output.id()));
         if self.outputs.len() != before {
             log::info!(
                 "salida retirada; superficies restantes: {}",
@@ -739,6 +804,65 @@ impl LayerShellHandler for BackgroundState {
 impl ShmHandler for BackgroundState {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
+    }
+}
+
+// Despacho del protocolo foreign-toplevel (pausa en fullscreen, D12).
+// wayland-client exige los impls sobre el estado dueño de la cola.
+impl wayland_client::Dispatch<ZwlrForeignToplevelManagerV1, ()> for BackgroundState {
+    fn event(
+        state: &mut Self,
+        _manager: &ZwlrForeignToplevelManagerV1,
+        event: <ZwlrForeignToplevelManagerV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::Event as MgrEvent;
+        match event {
+            MgrEvent::Toplevel { toplevel } => state.toplevel.toplevel_created(toplevel),
+            MgrEvent::Finished => {
+                state.toplevel.reset();
+                log::info!(
+                    "foreign-toplevel retirado por el compositor; pausa fullscreen desactivada"
+                );
+            }
+            _ => {}
+        }
+    }
+
+    // El evento `toplevel` (opcode 0) CREA un objeto hijo (el handle de
+    // la ventana): wayland-client exige declarar su user-data aquí, o
+    // el dispatcher paniquea en runtime. Los handles usan () como
+    // user-data, igual que el manager.
+    event_created_child!(BackgroundState, ZwlrForeignToplevelManagerV1, [
+        zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
+    ]);
+}
+
+impl wayland_client::Dispatch<ZwlrForeignToplevelHandleV1, ()> for BackgroundState {
+    fn event(
+        state: &mut Self,
+        handle: &ZwlrForeignToplevelHandleV1,
+        event: <ZwlrForeignToplevelHandleV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_handle_v1::Event as HEvent;
+        match event {
+            HEvent::State { state: states } => {
+                // El array del protocolo es una lista de u32 crudos
+                // (enum `state`); wayland-client lo entrega como Vec<u8>.
+                state.toplevel.toplevel_state(handle, &states);
+            }
+            HEvent::Title { title } => state.toplevel.toplevel_title(handle, title),
+            HEvent::OutputEnter { output } => state.toplevel.output_enter(handle, &output),
+            HEvent::OutputLeave { output } => state.toplevel.output_leave(handle, &output),
+            HEvent::Closed => state.toplevel.toplevel_closed(handle),
+            HEvent::Done => {}
+            _ => {}
+        }
     }
 }
 

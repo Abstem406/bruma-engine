@@ -18,3 +18,4 @@ log = "0.4.34"
 rustix = { version = "1.1", default-features = false, features = ["event", "std"] }
 smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["system"] }
 thiserror = "2.0.20"
+wayland-protocols-wlr = { version = "0.3.12", default-features = false, features = ["client"] }

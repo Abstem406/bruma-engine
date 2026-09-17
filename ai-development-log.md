@@ -370,3 +370,42 @@ con una).
 - Ciclo DPMS completo (power-off/power-on): sobrevive, reconfigura y
   sigue animando (RMSE 0.023).
 - RAM ~134 MB (una GPU compartida, no dos devices).
+
+## 2026-09-16 — Pausa en fullscreen por salida (Fase 5, D12)
+
+**Qué:** bind de `wlr-foreign-toplevel-management` (opcional): el
+compositor anuncia cada ventana con sus estados y salidas; si una
+ventana fullscreen está sobre una salida, su fondo deja de repintarse.
+La pausa es por salida; el runtime NO se pausa (el tiempo global sigue:
+al salir del fullscreen la animación retoma sin salto). Sin protocolo →
+`ToplevelTracker::disabled()`, nunca pausa.
+
+**Detalles de implementación:**
+- `event_created_child!` es obligatorio en el Dispatch del manager: el
+  evento `toplevel` crea un objeto hijo y wayland-client paniquea sin
+  user-data declarado (segundo panic de este tipo; el patrón ya está en
+  el log de la Fase 1 con otro protocolo).
+- El enum `state` del protocolo: maximized=0, minimized=1, activated=2,
+  fullscreen=3 — confirmado contra el XML, no contra memoria.
+- Logging de transiciones: fullscreen de toplevels en info, decision
+  por salida en info (solo cambia), `output_enter` en debug (ruido).
+
+**Verificación empírica en niri (la que valió):** CPU por ticks
+(/proc/PID/stat) + contador de transiciones en el log para garantizar
+estado estable durante cada medición:
+- Ambas animando (juego fullscreen en HDMI): 43 ticks/10s (solo eDP
+  trabajaba — consistente con ~4.3%/salida de la Fase 5).
+- Chat fullscreen en eDP → "salida eDP-1: pausa = true": 1 tick/8s.
+- Quitar fullscreen → "pausa = false": 33 ticks/8s (reanudado).
+RMSE de capturas resultó inútil aquí: el propio fullscreen y las
+ventanas cambian la imagen; la CPU del proceso es la señal limpia.
+
+**Falsas alarmes que descarté con datos:** (1) pensé que "ambas
+pausadas" era bug de contagio entre salidas — el log mostró que kitty
+TAMBIÉN estaba fullscreen (mi propio toggle de pruebas lo dejó así);
+(2) pensé que el toggle al juego fallaba — el juego se re-aplica
+fullscreen él solo al recibir foco (líneas true/false alternadas en el
+log). Lección repetida: antes de cazar bugs, loguear la verdad del
+sistema y leerla completa.
+
+**Pendiente del criterio original:** bloqueo de sesión y batería.

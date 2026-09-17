@@ -104,8 +104,15 @@
   compositor (enmascarado por el tráfico del escritorio). Ahora el
   deadline SIEMPRE acota el poll; CPU medida con escritorio quieto:
   ~5.3% de un núcleo por dos salidas a 30 fps (~2.6% por salida).
+- ✅ Pausa por salida en fullscreen (D12): bind opcional de
+  `wlr-foreign-toplevel-management`; una ventana fullscreen sobre una
+  salida congela SOLO su fondo (el último buffer queda en pantalla a
+  cargo del compositor; el tiempo global no se pausa → sin salto al
+  volver). Sin protocolo, degrada a "nunca pausar". Medido en niri:
+  43→~4 ticks CPU/8-10s al pausar (por salida), ~1 tick con ambas
+  pausadas, reanudación sin salto. `maximized` NO pausa (política D12).
 - Pendiente en la fase: DPI/escala por salida, wallpaper distinto por
-  pantalla, config persistente, pausa en fullscreen/bloqueo/batería.
+  pantalla, config persistente, pausa en bloqueo/batería.
 - Compatibilidad verificada: niri (referencia), Hyprland, sway, KWin.
 - GNOME/Mutter sigue siendo non-goal en v1.
 

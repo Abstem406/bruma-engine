@@ -103,6 +103,7 @@ dependencies = [
  "rustix",
  "smithay-client-toolkit",
  "thiserror",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]
