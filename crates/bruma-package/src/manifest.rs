@@ -4,6 +4,17 @@
 //! declare itself and nothing more. The `type: video|web` fields are
 //! **reserved** in the schema (D10) but this engine rejects them with a
 //! clear error until there is an implementation.
+//!
+//! Texture binding contract (Phase 6): each entry of `textures` (a path
+//! under `assets/`) becomes one `texture_2d<f32>` at binding `2i+1` and
+//! its sampler at binding `2i+2`, in declaration order — group 0, next to
+//! the uniform block (binding 0). Shaders declare exactly what they use:
+//!
+//! ```wgsl
+//! @group(0) @binding(0) var<uniform> U: Uniforms;
+//! @group(0) @binding(1) var tex0: texture_2d<f32>;
+//! @group(0) @binding(2) var samp0: sampler;
+//! ```
 
 use std::fmt;
 use std::path::Path;
@@ -42,7 +53,13 @@ pub struct Manifest {
     /// Named parameters: the sliders the UI will generate (Phase 6).
     /// Maximum 4 (they map 1:1 to `u_params0..3` of the uniform block).
     pub params: Vec<Param>,
+    /// Assets exposed to the shader as textures, in declaration order
+    /// (binding `2i+1` / `2i+2`). Paths under `assets/`, png/jpg, max 4.
+    pub textures: Vec<String>,
 }
+
+/// Textures-per-package cap (each is a binding pair in group 0).
+pub const MAX_TEXTURES: usize = 4;
 
 /// An adjustable parameter declared by the wallpaper.
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +92,8 @@ struct ManifestRaw {
     fps: Option<u32>,
     #[serde(default)]
     params: Vec<ParamRaw>,
+    #[serde(default)]
+    textures: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -187,6 +206,40 @@ impl Manifest {
             return Err(PackError::BadParam(format!("invalid min_engine: '{m}'")));
         }
 
+        // Textures: safe paths under assets/, image extensions, no
+        // duplicates. Existence inside the zip is checked by the store
+        // (the manifest alone cannot know).
+        let mut textures = Vec::with_capacity(raw.textures.len());
+        for t in raw.textures {
+            let ext = Path::new(&t)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if !matches!(ext, "png" | "jpg" | "jpeg") {
+                return Err(PackError::BadParam(format!(
+                    "texture '{t}': must be a .png/.jpg/.jpeg path"
+                )));
+            }
+            if !t.starts_with("assets/") || !is_safe_relative(&t) {
+                return Err(PackError::BadParam(format!(
+                    "texture '{t}': must be a safe path under assets/"
+                )));
+            }
+            if textures.contains(&t) {
+                return Err(PackError::BadParam(format!(
+                    "texture '{t}': declared twice"
+                )));
+            }
+            textures.push(t);
+        }
+        if textures.len() > MAX_TEXTURES {
+            return Err(PackError::BadParam(format!(
+                "the engine exposes {} texture bindings (u_tex0..), the manifest declares {}",
+                MAX_TEXTURES,
+                textures.len()
+            )));
+        }
+
         Ok(Manifest {
             format: raw.format,
             wallpaper_type: raw.wallpaper_type,
@@ -198,6 +251,7 @@ impl Manifest {
             min_engine: raw.min_engine,
             fps: raw.fps,
             params,
+            textures,
         })
     }
 
@@ -272,6 +326,16 @@ impl fmt::Display for Manifest {
                     p.default
                 )?;
             }
+        }
+        for (i, t) in self.textures.iter().enumerate() {
+            writeln!(
+                f,
+                "texture {}: {} (binding {}/{})",
+                i,
+                t,
+                2 * i + 1,
+                2 * i + 2
+            )?;
         }
         Ok(())
     }
@@ -389,6 +453,55 @@ mod tests {
     #[test]
     fn fps_out_of_range() {
         let json = base_json().replace("\"fps\": 30", "\"fps\": 300");
+        assert!(Manifest::parse(&json).is_err());
+    }
+
+    #[test]
+    fn textures_rules() {
+        // Valid: relative path under assets/, png.
+        let json = base_json().replace(
+            r#""preview": "preview.png","#,
+            r#""preview": "preview.png",
+            "textures": ["assets/mask.png", "assets/photo.jpg"],"#,
+        );
+        let m = Manifest::parse(&json).unwrap();
+        assert_eq!(m.textures, vec!["assets/mask.png", "assets/photo.jpg"]);
+
+        // Outside assets/: rejected.
+        let json = base_json().replace(
+            r#""preview": "preview.png","#,
+            r#""preview": "preview.png", "textures": ["mask.png"],"#,
+        );
+        assert!(Manifest::parse(&json).is_err());
+
+        // Traversal: rejected.
+        let json = base_json().replace(
+            r#""preview": "preview.png","#,
+            r#""preview": "preview.png", "textures": ["assets/../etc/passwd.png"],"#,
+        );
+        assert!(Manifest::parse(&json).is_err());
+
+        // Wrong extension: rejected.
+        let json = base_json().replace(
+            r#""preview": "preview.png","#,
+            r#""preview": "preview.png", "textures": ["assets/shader.wgsl"],"#,
+        );
+        assert!(Manifest::parse(&json).is_err());
+
+        // Duplicate: rejected.
+        let json = base_json().replace(
+            r#""preview": "preview.png","#,
+            r#""preview": "preview.png",
+            "textures": ["assets/a.png", "assets/a.png"],"#,
+        );
+        assert!(Manifest::parse(&json).is_err());
+
+        // More than 4: rejected.
+        let json = base_json().replace(
+            r#""preview": "preview.png","#,
+            r#""preview": "preview.png",
+            "textures": ["assets/a.png", "assets/b.png", "assets/c.png", "assets/d.png", "assets/e.png"],"#,
+        );
         assert!(Manifest::parse(&json).is_err());
     }
 

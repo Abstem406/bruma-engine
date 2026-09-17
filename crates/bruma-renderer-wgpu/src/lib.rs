@@ -27,6 +27,7 @@ use std::ptr::NonNull;
 
 use bruma_renderer::FrameRenderer;
 use bruma_renderer::FrameState;
+use image::ImageReader;
 
 /// Alias of the frame contract for crate consumers (the CLI annotates
 /// types with this without depending directly on bruma-renderer).
@@ -103,6 +104,11 @@ impl Uniforms {
 
 /// Layout constant shared between platform and runtime.
 const UNIFORM_SIZE: u64 = 64;
+
+/// Texture slots of the fixed group-0 layout (matches the manifest's
+/// `textures` cap): slot i occupies bindings 2i+1 (texture) and 2i+2
+/// (sampler).
+const TEXTURE_SLOTS: usize = 4;
 
 /// Builds the quad pipeline (`TriangleStrip` topology, `REPLACE` blend,
 /// vertices generated in the WGSL) for an already compiled module and its
@@ -793,6 +799,12 @@ pub struct AnimatedRenderer {
     /// have `intensidad=0.2` and another `0.9` with the same shader and
     /// shared runtime → synchronized animation).
     param_overrides: Vec<(usize, f32)>,
+    /// Texture and sampler views for the shader's texture slots, in
+    /// binding order (slot i → bindings 2i+1 / 2i+2). Initialized to
+    /// 1×1 dummies; [`Self::set_textures`] replaces them from the
+    /// package's `assets/`.
+    texture_views: Vec<wgpu::TextureView>,
+    texture_samplers: Vec<wgpu::Sampler>,
 }
 
 /// Shader reload event for [`AnimatedRenderer::set_reload_callback`]'s
@@ -860,38 +872,88 @@ impl AnimatedRenderer {
             mapped_at_creation: false,
         });
 
+        // Fixed group-0 layout: uniform + 4 texture/sampler pairs. A
+        // layout entry the shader doesn't use is fine; the bind group
+        // always fills every entry (dummies for undeclared slots), so
+        // hot-reloaded shader variants share this one layout.
+        let mut layout_entries = vec![wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(UNIFORM_SIZE),
+            },
+            count: None,
+        }];
+        for i in 0..TEXTURE_SLOTS {
+            layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: (2 * i + 1) as u32,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            });
+            layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: (2 * i + 2) as u32,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
         let bind_group_layout =
             ctx.device()
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("bruma-anim-bgl"),
-                    entries: &[wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(UNIFORM_SIZE),
-                        },
-                        count: None,
-                    }],
+                    entries: &layout_entries,
                 });
 
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bruma-anim-bind"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buf,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
+        // 1x1 opaque black dummies: declared-but-unbound slots sample
+        // black instead of failing validation.
+        let dummy = ctx.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("bruma-texture-dummy"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
         });
-
+        let dummy_view = dummy.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = ctx.device().create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("bruma-texture-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        // Initial bind group: every slot bound to the 1×1 dummy (a
+        // shader that samples undeclared textures gets black, not an
+        // error). `set_textures` swaps in real views from the package.
+        let device = ctx.device();
+        let initial_views: Vec<wgpu::TextureView> =
+            (0..TEXTURE_SLOTS).map(|_| dummy_view.clone()).collect();
+        let initial_samplers: Vec<wgpu::Sampler> =
+            (0..TEXTURE_SLOTS).map(|_| sampler.clone()).collect();
+        let view_refs: Vec<&wgpu::TextureView> = initial_views.iter().collect();
+        let sampler_refs: Vec<&wgpu::Sampler> = initial_samplers.iter().collect();
+        let bind_group = Self::make_bind_group(
+            &uniform_buf,
+            device,
+            &bind_group_layout,
+            &view_refs,
+            &sampler_refs,
+        );
         let pipeline = Self::build_pipeline(&ctx, &source, &bind_group_layout)?;
 
-        Ok(Self {
+        let renderer = Self {
             ctx,
             shader_path: shader_path.to_owned(),
             last_mtime: Self::mtime(shader_path),
@@ -903,7 +965,10 @@ impl AnimatedRenderer {
             on_reload: None,
             last_error: None,
             param_overrides: Vec::new(),
-        })
+            texture_views: initial_views,
+            texture_samplers: initial_samplers,
+        };
+        Ok(renderer)
     }
 
     /// Sets THIS output's parameter overrides (Phase 5).
@@ -929,6 +994,121 @@ impl AnimatedRenderer {
     /// File mtime, if it can be stat'ed.
     fn mtime(path: &Path) -> Option<std::time::SystemTime> {
         std::fs::metadata(path).and_then(|m| m.modified()).ok()
+    }
+
+    /// Builds a bind group from the given texture views and samplers
+    /// (one pair per slot, in binding order). Slot i occupies bindings
+    /// 2i+1 (texture) and 2i+2 (sampler); binding 0 is the uniform block.
+    fn make_bind_group(
+        uniform_buf: &wgpu::Buffer,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        views: &[&wgpu::TextureView],
+        samplers: &[&wgpu::Sampler],
+    ) -> wgpu::BindGroup {
+        let mut entries = vec![wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(uniform_buf.as_entire_buffer_binding()),
+        }];
+        for (i, (view, sampler)) in views.iter().zip(samplers.iter()).enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: (2 * i + 1) as u32,
+                resource: wgpu::BindingResource::TextureView(view),
+            });
+            entries.push(wgpu::BindGroupEntry {
+                binding: (2 * i + 2) as u32,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            });
+        }
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bruma-anim-bg"),
+            layout,
+            entries: &entries,
+        })
+    }
+
+    /// Uploads the package's textures into the fixed layout slots, in
+    /// declaration order (slot i = bindings 2i+1 / 2i+2).
+    ///
+    /// Called by the CLI after construction, BEFORE the first frame: the
+    /// decoder (`image` crate, already a dependency) hands over an RGBA8
+    /// buffer that goes to the GPU with `write_texture` (native path; the
+    /// external-image copy is web-only). Failure degrades to black
+    /// textures and is logged: a missing image must not kill the
+    /// wallpaper.
+    pub fn set_textures(&mut self, paths: &[String]) {
+        if paths.is_empty() {
+            return;
+        }
+        for (i, path) in paths.iter().enumerate() {
+            if i >= TEXTURE_SLOTS {
+                break;
+            }
+            let Ok(reader) = ImageReader::open(path) else {
+                log::warn!("texture {}: could not open {}", i, path);
+                continue;
+            };
+            let Ok(img) = reader.decode() else {
+                log::warn!("texture {}: could not decode {}", i, path);
+                continue;
+            };
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            if w == 0 || h == 0 {
+                log::warn!("texture {}: empty image {}", i, path);
+                continue;
+            }
+            let texture = self.ctx.device().create_texture(&wgpu::TextureDescriptor {
+                label: Some("bruma-package-texture"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.ctx.queue().write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                rgba.as_raw(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.texture_views[i] = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            log::info!("texture {} loaded: {} ({}x{})", i, path, w, h);
+        }
+        self.rebuild_bind_group();
+    }
+
+    /// Recreates the bind group from the current views and samplers
+    /// (after a texture slot changes).
+    fn rebuild_bind_group(&mut self) {
+        let views: Vec<&wgpu::TextureView> = self.texture_views.iter().collect();
+        let samplers: Vec<&wgpu::Sampler> = self.texture_samplers.iter().collect();
+        self.bind_group = Self::make_bind_group(
+            &self.uniform_buf,
+            self.ctx.device(),
+            &self.bind_group_layout,
+            &views,
+            &samplers,
+        );
     }
 
     /// Compiles the shader and builds the pipeline with bruma's standard

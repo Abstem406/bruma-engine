@@ -316,13 +316,15 @@ fn extract_all(
     Ok(())
 }
 
-/// Checks that the manifest's `entry` and `preview` exist inside the
-/// package and that no ZIP entry is a symlink.
+/// Checks that the manifest's `entry`, `preview` and declared `textures`
+/// exist inside the package and that none of those entries is a symlink.
 fn check_entry_and_preview(
     archive: &mut ZipArchive<std::io::Cursor<&[u8]>>,
     manifest: &Manifest,
 ) -> Result<(), PackError> {
-    for name in [&manifest.entry, &manifest.preview] {
+    let mut names: Vec<&str> = vec![&manifest.entry, &manifest.preview];
+    names.extend(manifest.textures.iter().map(|s| s.as_str()));
+    for name in names {
         let file: ZipFile<'_, std::io::Cursor<&[u8]>> = archive
             .by_name(name)
             .map_err(|_| PackError::Missing(name.to_owned()))?;

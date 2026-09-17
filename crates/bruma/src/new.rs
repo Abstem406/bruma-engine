@@ -11,38 +11,57 @@ use std::path::{Path, PathBuf};
 
 /// Built-in templates (Phase 6). Each one compiles standalone against the
 /// engine's uniform block and declares its tunable params in the
-/// generated manifest.
-const TEMPLATES: &[(&str, &str)] = &[
-    ("waves", include_str!("templates/waves.wgsl")),
-    ("fog", include_str!("templates/fog.wgsl")),
-    ("water", include_str!("templates/water.wgsl")),
+/// generated manifest. Assets map 1:1 with the manifest's `textures`
+/// paths (written under `<pkg>/assets/`).
+const TEMPLATES: &[Template] = &[
+    Template {
+        name: "waves",
+        source: include_str!("templates/waves.wgsl"),
+        assets: &[],
+        params: &[("speed", "Speed", 0.5), ("glow", "Glow", 0.3)],
+    },
+    Template {
+        name: "fog",
+        source: include_str!("templates/fog.wgsl"),
+        assets: &[],
+        params: &[("speed", "Speed", 0.5), ("density", "Density", 0.6)],
+    },
+    Template {
+        name: "water",
+        source: include_str!("templates/water.wgsl"),
+        assets: &[],
+        params: &[("waves", "Waves", 0.4), ("speed", "Speed", 0.5)],
+    },
+    Template {
+        name: "water-photo",
+        source: include_str!("templates/water-photo.wgsl"),
+        assets: &[(
+            "assets/water-photo.png",
+            include_bytes!("templates/assets/water-photo.png"),
+        )],
+        params: &[("waves", "Waves", 0.4), ("speed", "Speed", 0.5)],
+    },
 ];
 
+/// One scaffolding template: shader source, extra asset files and the
+/// params written into the manifest (in `u_params` order).
+struct Template {
+    name: &'static str,
+    source: &'static str,
+    assets: &'static [(&'static str, &'static [u8])],
+    params: &'static [(&'static str, &'static str, f32)],
+}
+
 fn template_source(name: &str) -> Option<&'static str> {
-    TEMPLATES
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, src)| *src)
+    TEMPLATES.iter().find(|t| t.name == name).map(|t| t.source)
 }
 
 pub fn template_list() -> String {
     TEMPLATES
         .iter()
-        .map(|(n, _)| *n)
+        .map(|t| t.name)
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// Params each template declares, in the order the shader expects them
-/// in `u_params`.
-fn template_params(name: &str) -> &[(&str, &str, f32)] {
-    match name {
-        // (name, label, default)
-        "waves" => &[("speed", "Speed", 0.5), ("glow", "Glow", 0.3)],
-        "fog" => &[("speed", "Speed", 0.5), ("density", "Density", 0.6)],
-        "water" => &[("waves", "Waves", 0.4), ("speed", "Speed", 0.5)],
-        _ => &[],
-    }
 }
 
 /// 1x1 opaque PNG, so `wallpaper.json`'s `preview` is real from minute
@@ -55,20 +74,11 @@ const PREVIEW_PNG: &[u8] = &[
     0x44, 0xAE, 0x42, 0x60, 0x82,
 ];
 
-/// Builds the manifest JSON for a new package (schema v1, Phase 4).
-fn manifest_json(title: &str, template: &str) -> String {
-    let params = template_params(template)
-        .iter()
-        .map(|(name, label, default)| {
-            format!(
-                r#"    {{ "name": "{}", "label": "{}", "default": {} }}"#,
-                name, label, default
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",\n");
-
-    format!(
+/// Builds the manifest JSON for a new package (schema v1 + `textures`).
+/// `None` if the template name is unknown.
+fn manifest_json(title: &str, template: &str) -> Option<String> {
+    let tpl = TEMPLATES.iter().find(|t| t.name == template)?;
+    let mut json = format!(
         r#"{{
   "format": 1,
   "type": "shader",
@@ -80,9 +90,32 @@ fn manifest_json(title: &str, template: &str) -> String {
   "fps": 30,
   "params": [
 {params}
-  ]
-}}"#,
-    )
+  ]"#,
+        params = tpl
+            .params
+            .iter()
+            .map(|(name, label, default)| {
+                format!(
+                    r#"    {{ "name": "{}", "label": "{}", "default": {} }}"#,
+                    name, label, default
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",\n")
+    );
+    if !tpl.assets.is_empty() {
+        json.push_str(",\n  \"textures\": [");
+        let list = tpl
+            .assets
+            .iter()
+            .map(|(path, _)| format!("\n    \"{path}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        json.push_str(&list);
+        json.push_str("\n  ]");
+    }
+    json.push_str("\n}\n");
+    Some(json)
 }
 
 /// Creates the package directory and returns the written paths.
@@ -107,20 +140,32 @@ pub fn create(name: &str, template: &str, dir: Option<&Path>) -> Result<Vec<Path
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create {}: {e}", root.display()))?;
 
-    let json = manifest_json(name, template);
+    let json =
+        manifest_json(name, template).ok_or_else(|| format!("unknown template '{template}'"))?;
     // Self-check with the REAL parser: a scaffold can never ship a broken
     // manifest (guards against schema drift with the templates).
     bruma_package::Manifest::parse(&json)
         .map_err(|e| format!("internal error: generated manifest is invalid: {e}"))?;
 
-    let files = [
-        ("wallpaper.json", json.into_bytes()),
-        ("main.wgsl", source.as_bytes().to_vec()),
-        ("preview.png", PREVIEW_PNG.to_vec()),
+    let mut files = vec![
+        ("wallpaper.json".to_owned(), json.into_bytes()),
+        ("main.wgsl".to_owned(), source.as_bytes().to_vec()),
+        ("preview.png".to_owned(), PREVIEW_PNG.to_vec()),
     ];
+    let tpl = TEMPLATES
+        .iter()
+        .find(|t| t.name == template)
+        .ok_or_else(|| format!("unknown template '{template}'"))?;
+    for (path, data) in tpl.assets {
+        files.push(((*path).to_owned(), (*data).to_vec()));
+    }
     let mut written = Vec::with_capacity(files.len());
     for (fname, data) in files {
-        let path = root.join(fname);
+        let path = root.join(&fname);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+        }
         std::fs::write(&path, &data)
             .map_err(|e| format!("could not write {}: {e}", path.display()))?;
         written.push(path);
@@ -134,12 +179,14 @@ mod tests {
 
     #[test]
     fn every_template_manifest_is_valid() {
-        for (tpl, _) in TEMPLATES {
-            let json = manifest_json("Test", tpl);
+        for t in TEMPLATES {
+            let json =
+                manifest_json("Test", t.name).unwrap_or_else(|| panic!("template {} json", t.name));
             let m = bruma_package::Manifest::parse(&json)
-                .unwrap_or_else(|e| panic!("template {tpl}: {e}"));
+                .unwrap_or_else(|e| panic!("template {}: {e}", t.name));
             assert_eq!(m.entry, "main.wgsl");
-            assert_eq!(m.params.len(), 2, "template {tpl}");
+            assert_eq!(m.params.len(), 2, "template {}", t.name);
+            assert_eq!(m.textures.len(), t.assets.len(), "template {}", t.name);
         }
     }
 
@@ -149,7 +196,9 @@ mod tests {
         // template that lands broken in a release fails here first.
         let failures: Vec<String> = TEMPLATES
             .iter()
-            .filter_map(|(name, src)| {
+            .filter_map(|t| {
+                let src = t.source;
+                let name = t.name;
                 let module = match naga::front::wgsl::parse_str(src) {
                     Ok(m) => m,
                     Err(e) => return Some(format!("{name}: parse: {}", e.emit_to_string(src))),
@@ -189,6 +238,6 @@ mod tests {
     fn unknown_template_lists_available() {
         let err = create("x", "vortice", None).unwrap_err();
         assert!(err.contains("unknown template"));
-        assert!(err.contains("waves, fog, water"));
+        assert!(err.contains("waves, fog, water, water-photo"));
     }
 }

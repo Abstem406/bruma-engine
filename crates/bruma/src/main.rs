@@ -365,10 +365,12 @@ fn service_command(args: &[String]) {
 /// An already-resolved source for ONE output (Phase 5).
 enum Source {
     /// Animated shader (from a package or a loose file) with overrides by
-    /// position.
+    /// position. `textures` are the package's texture files in manifest
+    /// order (absolute paths); empty for loose shaders.
     Shader {
         path: String,
         overrides: Vec<(usize, f32)>,
+        textures: Vec<String>,
     },
     /// Static image.
     Image(String),
@@ -475,12 +477,18 @@ fn resolve_source(
         return Source::Shader {
             path: pkg_path.join(&manifest.entry).display().to_string(),
             overrides,
+            textures: manifest
+                .textures
+                .iter()
+                .map(|rel| pkg_path.join(rel).display().to_string())
+                .collect(),
         };
     }
     if let Some(p) = &oc.shader {
         return Source::Shader {
             path: p.clone(),
             overrides: Vec::new(),
+            textures: Vec::new(),
         };
     }
     if let Some(p) = &oc.image {
@@ -694,6 +702,7 @@ fn run_command(args: &[String]) {
             default_source = Source::Shader {
                 path: p.clone(),
                 overrides: Vec::new(),
+                textures: Vec::new(),
             };
             has_content = true;
         } else if let Some(p) = &image_path {
@@ -786,7 +795,11 @@ fn run_command(args: &[String]) {
         let display = handles.display_ptr;
         let surface = handles.surface_ptr;
         match source {
-            Source::Shader { path, overrides } => {
+            Source::Shader {
+                path,
+                overrides,
+                textures,
+            } => {
                 let mut renderer = unsafe {
                     bruma_renderer_wgpu::AnimatedRenderer::on_shared(
                         shared_gpu.as_ref().ok_or("no GPU")?,
@@ -796,6 +809,10 @@ fn run_command(args: &[String]) {
                     )
                 }
                 .map_err(|e| e.to_string())?;
+                // Package textures (manifest `textures` order) go to the
+                // fixed slots before the first frame; empty for loose
+                // shaders.
+                renderer.set_textures(textures);
                 if !overrides.is_empty() {
                     // THIS output's overrides (resolved by name against
                     // the manifest in the CLI).
