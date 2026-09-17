@@ -279,3 +279,24 @@ mundo físico del usuario.
 **Generalización para el resto del proyecto:** ninguna prueba debe
 depender del entorno del usuario (bus, sesión, GPU activa, pantallas).
 Todo efecto observable pasa por una frontera construible-en-disabled.
+
+## 2026-09-16 — Bug de geometría: mitad de pantalla sin dibujar (desde Fase 2)
+
+**Síntoma:** el usuario ve un corte diagonal exacto de esquina a esquina:
+shader solo en la mitad superior-izquierda, negro en el resto.
+
+**Causa raíz:** quads con `draw(0..4)` en topología TriangleList → un
+solo triángulo (0,1,2); el vértice 3 se descarta. El comentario del
+shader describía dos triángulos estilo indexado que nunca existió como
+index buffer. El clear transparente dejaba ver el escritorio detrás.
+
+**Por qué sobrevivió dos fases de "verificación":** todas las mediciones
+usaban el píxel (5,5) — dentro del triángulo que sí funcionaba. El
+histograma de la Fase 2 confirmó colores "asomando" sin verificar
+cobertura completa. Lección registrada: verificar las 4 esquinas +
+centro, nunca un punto de la región sabida-buena.
+
+**Corrección:** `topology: TriangleStrip` en los 3 pipelines (los 4
+vértices ya estaban en orden strip; `draw(0..3)` del demo no cambia).
+Verificado: 4 esquinas con el shader, centro brillante con
+intensidad=0.9, animación viva entre capturas.

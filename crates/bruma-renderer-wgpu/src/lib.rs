@@ -303,7 +303,14 @@ impl WgpuRenderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                primitive: wgpu::PrimitiveState::default(),
+                // Los quads de los shaders son 4 vértices en orden strip
+                // (TL, TR, BL, BR → triángulos 0-1-2 y 1-2-3); el demo del
+                // triángulo (draw 0..3) es idéntico en strip. Con list solo
+                // se dibujaba el primer triángulo: mitad de pantalla negra.
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
@@ -513,7 +520,14 @@ impl ImageRenderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                primitive: wgpu::PrimitiveState::default(),
+                // Los quads de los shaders son 4 vértices en orden strip
+                // (TL, TR, BL, BR → triángulos 0-1-2 y 1-2-3); el demo del
+                // triángulo (draw 0..3) es idéntico en strip. Con list solo
+                // se dibujaba el primer triángulo: mitad de pantalla negra.
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
@@ -782,7 +796,14 @@ impl AnimatedRenderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                primitive: wgpu::PrimitiveState::default(),
+                // Los quads de los shaders son 4 vértices en orden strip
+                // (TL, TR, BL, BR → triángulos 0-1-2 y 1-2-3); el demo del
+                // triángulo (draw 0..3) es idéntico en strip. Con list solo
+                // se dibujaba el primer triángulo: mitad de pantalla negra.
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
