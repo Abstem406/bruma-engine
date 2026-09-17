@@ -1,9 +1,10 @@
-//! Manifiesto `wallpaper.json`: schema v1, parseo y validación de campos.
+//! El manifiesto `wallpaper.json`: schema v1, parseo de campos y
+//! validación.
 //!
 //! El schema es deliberadamente mínimo (ver D5): lo que un wallpaper
 //! necesita para declararse y nada más. Los campos `type: video|web`
 //! están **reservados** en el schema (D10) pero este motor los rechaza
-//! con un error claro hasta que haya implementación.
+//! con un error claro hasta que haya una implementación.
 
 use std::fmt;
 use std::path::Path;
@@ -15,7 +16,7 @@ use crate::error::PackError;
 /// Versión del schema que habla este motor.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// Campos que exige el schema v1 (PLAN Fase 4).
+/// Campos requeridos por el schema v1 (PLAN, Fase 4).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
     /// Versión del schema (1).
@@ -23,24 +24,24 @@ pub struct Manifest {
     /// Tipo de wallpaper: `shader` (implementado) o `video`/`web`
     /// (reservados, D10).
     pub wallpaper_type: String,
-    /// Título legible.
+    /// Título legible por humanos.
     pub title: String,
     /// Versión del paquete ("major.minor.patch"). Ausente: "0.0.0".
-    /// Sostiene el layout versionado de instalación.
+    /// Sustenta el layout de instalación versionado.
     pub version: String,
     /// Ruta del shader de entrada, relativa a la raíz del paquete.
     pub entry: String,
     /// Ruta de la imagen de preview, relativa a la raíz del paquete.
     pub preview: String,
-    /// Capacidades que el wallpaper declara usar. Hoy solo se reconocen
-    /// `params` y `mouse`; cualquier otra cosa es un error de validación.
+    /// Capacidades que declara el wallpaper. Hoy solo se reconocen
+    /// `params` y `mouse`; cualquier otra es un error de validación.
     pub permissions: Vec<String>,
     /// Versión mínima del motor (semver: "0.1.0").
     pub min_engine: Option<String>,
     /// Límite de FPS por defecto (1..=120). Ausente: 30.
     pub fps: Option<u32>,
-    /// Parámetros con nombre: los sliders que la UI generará (Fase 6).
-    /// Máximo 4 (máapean 1:1 a `u_params0..3` del uniform block).
+    /// Parámetros con nombre: los sliders que generará la UI (Fase 6).
+    /// Máx 4 (mapean 1:1 a `u_params0..3` del uniform block).
     pub params: Vec<Param>,
 }
 
@@ -89,8 +90,8 @@ struct ParamRaw {
 
 impl Manifest {
     /// Parsea y valida un manifiesto desde su JSON. Aplica todas las
-    /// reglas del schema v1: versiones, tipos, rutas seguras, permisos
-    /// conocidos, límites de parámetros y rangos de fps/default.
+    /// reglas del schema v1: versiones, tipos, rutas seguras,
+    /// permisos conocidos, límites de parámetros y rangos fps/default.
     pub fn parse(json: &str) -> Result<Self, PackError> {
         let raw: ManifestRaw = serde_json::from_str(json)
             .map_err(|e| PackError::Json("wallpaper.json".to_owned(), e))?;
@@ -115,7 +116,7 @@ impl Manifest {
         let version = raw.version.unwrap_or_else(|| "0.0.0".to_owned());
         if !is_semver_triple(&version) {
             return Err(PackError::BadParam(format!(
-                "version inválida: '{version}'"
+                "versión inválida: '{version}'"
             )));
         }
 
@@ -221,7 +222,7 @@ impl Manifest {
     }
 }
 
-/// ¿Es un semver "major.minor.patch" numérico y simple?
+/// ¿Es un semver "major.minor.patch" puramente numérico?
 fn is_semver_triple(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
     parts.len() == 3
@@ -230,10 +231,10 @@ fn is_semver_triple(s: &str) -> bool {
             .all(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit()))
 }
 
-/// ¿Es una ruta relativa segura? Rechaza absolutes, `..`, componentes
-/// vacíos/raros y prefijos de Windows. `enclosed_name` de zip hará la
-/// comprobación fuerte al leer cada entrada; esta es la de primera línea
-/// para campos del manifiesto.
+/// ¿Es una ruta relativa segura? Rechaza absolutas, `..`, componentes
+/// vacíos/extraños y prefijos de Windows. El `enclosed_name` de zip
+/// hace la comprobación fuerte al leer cada entrada; esta es la
+/// primera línea de defensa para los campos del manifiesto.
 fn is_safe_relative(path: &str) -> bool {
     if path.is_empty()
         || path.starts_with('/')
@@ -299,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn manifiesto_valido_parsea() {
+    fn valid_manifest_parses() {
         let m = Manifest::parse(&base_json()).unwrap();
         assert_eq!(m.wallpaper_type, "shader");
         assert_eq!(m.install_name(), "ondas-nortie");
@@ -309,14 +310,14 @@ mod tests {
     }
 
     #[test]
-    fn tipo_reservado_se_rechaza_con_mensaje_claro() {
+    fn reserved_type_rejected_with_clear_message() {
         let json = base_json().replace("\"shader\"", "\"video\"");
         let err = Manifest::parse(&json).unwrap_err().to_string();
         assert!(err.contains("reservado"), "{err}");
     }
 
     #[test]
-    fn entry_con_traversal_no_pasa() {
+    fn entry_with_traversal_is_rejected() {
         for bad in [
             "../main.wgsl",
             "/etc/passwd",
@@ -326,21 +327,21 @@ mod tests {
             let json = base_json().replace("main.wgsl", bad);
             assert!(
                 Manifest::parse(&json).is_err(),
-                "entry '{bad}' debió rechazarse"
+                "entry '{bad}' debería haber sido rechazado"
             );
         }
     }
 
     #[test]
-    fn format_viejo_rechazado() {
+    fn old_format_rejected() {
         let json = base_json().replace("\"format\": 1", "\"format\": 2");
         let err = Manifest::parse(&json).unwrap_err().to_string();
         assert!(err.contains("format=2"), "{err}");
     }
 
     #[test]
-    fn campo_desconocido_rechazado() {
-        let json = base_json().replace("preview.png", "preview.png\", \"trampa\": 1");
+    fn unknown_field_rejected() {
+        let json = base_json().replace("preview.png", "preview.png\", \"trap\": 1");
         assert!(Manifest::parse(&json).is_err());
     }
 
@@ -348,7 +349,7 @@ mod tests {
         r#""params": [{"name": "brillo", "label": "Brillo", "default": 0.2}]"#;
 
     #[test]
-    fn params_limites_y_duplicados() {
+    fn params_limits_and_duplicates() {
         // Más de 4: rechazado.
         let json = base_json().replace(
             PARAMS_BASE,
@@ -369,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn version_default_y_validacion() {
+    fn default_version_and_validation() {
         // Sin versión: "0.0.0".
         assert_eq!(Manifest::parse(&base_json()).unwrap().version, "0.0.0");
         // Con versión válida.
@@ -383,19 +384,19 @@ mod tests {
         let json = base_json().replace(
             r#""preview": "preview.png","#,
             r#""preview": "preview.png",
-            "version": "uno.dos","#,
+            "version": "one.two","#,
         );
         assert!(Manifest::parse(&json).is_err());
     }
 
     #[test]
-    fn fps_fuera_de_rango() {
+    fn fps_out_of_range() {
         let json = base_json().replace("\"fps\": 30", "\"fps\": 300");
         assert!(Manifest::parse(&json).is_err());
     }
 
     #[test]
-    fn install_name_determinista() {
+    fn install_name_is_deterministic() {
         for (title, expected) in [
             ("Ondas Nortie", "ondas-nortie"),
             ("  Raro  !! ", "raro"),
