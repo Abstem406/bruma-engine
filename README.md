@@ -1,47 +1,47 @@
 # bruma 🌫️
 
-> **Motor libre de wallpapers animados para Wayland** — shaders WGSL,
-> eficiente, con formato abierto.
+> **Free animated wallpaper engine for Wayland** — WGSL shaders,
+> efficient, with an open format.
 
-`bruma` es un motor libre y gratuito para tener fondos de pantalla animados
-en Linux/Wayland: shaders WGSL a 60 fps con coste mínimo de CPU, un formato
-de paquete abierto (`.wallpaper`) y herramientas para que cualquiera cree y
-comparta sus fondos.
+`bruma` is a free engine for animated wallpapers on Linux/Wayland: WGSL
+shaders at 60 fps with minimal CPU cost, an open package format
+(`.wallpaper`) and tools so anyone can create and share their
+wallpapers.
 
-## Estado del proyecto
+## Project status
 
-Fases 0–5 completadas: shaders WGSL animados con hot-reload, imagen y
-color sólido, formato de paquete `.wallpaper` (instalación segura con
-`validate`/`install`), y escritorio completo — multi-monitor con fondo
-distinto por pantalla, pausa automática en fullscreen/bloqueo/batería,
-escala HiDPI por salida y recarga de config en caliente. En construcción:
-herramientas para creadores (Fase 6) — ver [PLAN.md](PLAN.md).
-
-```bash
-bruma run                        # sin flags: usa la config persistente
-bruma run 0x3B4252               # color hex a elección (todas las pantallas)
-bruma run --gpu                  # triángulo WGSL (prueba de pipeline)
-bruma run --image foto.png       # imagen a pantalla completa
-bruma run --shader hola.wgsl     # shader animado con hot-reload
-bruma run --shader hola.wgsl --fps 60 --param=0.5  # ritmo y parámetros
-bruma run --package mi-onda --param=intensidad=0.9  # paquete instalado
-```
-
-## Escritorio completo (Fase 5)
-
-Una superficie por salida (multi-monitor con GPU compartida), pausa
-automática en fullscreen (solo esa pantalla), sesión bloqueada y
-batería (global, vía logind/UPower). Config persistente por pantalla:
+Phases 0–5 complete: animated WGSL shaders with hot-reload, image and
+solid color, the `.wallpaper` package format (secure installation with
+`validate`/`install`), and a full desktop experience — multi-monitor
+with a different wallpaper per screen, automatic pause on
+fullscreen/lock/battery, per-output HiDPI scale and hot config reload.
+In progress: creator tools (Phase 6) — see [PLAN.md](PLAN.md).
 
 ```bash
-bruma config init                # crea ~/.config/bruma/config.json
-bruma config show                # qué va a correr y dónde
-bruma service install            # arranca con la sesión (systemd --user)
-bruma service remove             # lo quita
+bruma run                        # no flags: uses the persistent config
+bruma run 0x3B4252               # hex color of choice (all screens)
+bruma run --gpu                  # WGSL triangle (pipeline test)
+bruma run --image photo.png      # fullscreen image
+bruma run --shader hello.wgsl    # animated shader with hot-reload
+bruma run --shader hello.wgsl --fps 60 --param=0.5  # pace and parameters
+bruma run --package onda-bruma-demo --param=intensidad=0.9  # installed package
 ```
 
-Ejemplo de `config.json` — cada pantalla lo suyo, params distintos del
-mismo paquete (la animación va sincronizada: un solo reloj):
+## Full desktop (Phase 5)
+
+One surface per output (multi-monitor with a shared GPU), automatic
+pause on fullscreen (that screen only), locked session and battery
+(global, via logind/UPower). Persistent per-screen config:
+
+```bash
+bruma config init                # creates ~/.config/bruma/config.json
+bruma config show                # what will run and where
+bruma service install            # starts with the session (systemd --user)
+bruma service remove             # removes it
+```
+
+Example `config.json` — each screen its own thing, different params of
+the same package (the animation stays synchronized: a single clock):
 
 ```json
 {
@@ -54,74 +54,75 @@ mismo paquete (la animación va sincronizada: un solo reloj):
 }
 ```
 
-## Arquitectura
+## Architecture
 
 ```
 crates/
-├── bruma-core/            # tipos base, sin dependencias externas
-├── bruma-package/         # formato .wallpaper (zip) — Fase 4
-├── bruma-runtime/         # contrato de runtime (tiempo, mouse...) — Fase 3
-├── bruma-renderer/        # contrato de renderizado — Fase 2
-├── bruma-platform/        # Wayland wlr-layer-shell — Fase 1
+├── bruma-core/            # base types, no external dependencies
+├── bruma-package/         # .wallpaper format (zip) — Phase 4
+├── bruma-runtime/         # runtime contract (time, mouse...) — Phase 3
+├── bruma-renderer/        # rendering contract — Phase 2
+├── bruma-platform/        # Wayland wlr-layer-shell — Phase 1
 └── bruma/                 # CLI: run, install, new, validate
 ```
 
-Regla de oro: `core`, `package` y `runtime` **nunca** dependerán de
-wgpu, Wayland ni Steam (ver [DECISIONS.md](DECISIONS.md)).
+Golden rule: `core`, `package` and `runtime` will **never** depend on
+wgpu, Wayland or Steam (see [DECISIONS.md](DECISIONS.md)).
 
 ## Roadmap
 
-| Fase | Qué | Demo |
+| Phase | What | Demo |
 |---|---|---|
-| 0 | workspace, CI, licencias, docs | ✅ esta estructura |
-| 1 | ventana de fondo Wayland (niri primero) | ✅ color sólido detrás de todo |
-| 2 | wgpu + WGSL | ✅ imagen a pantalla completa |
-| 3 | contrato de runtime + hot-reload | ✅ shader animado editado en vivo |
-| 4 | formato `.wallpaper` | ✅ `pack` → `validate` → `install` → `run --package` |
-| 5 | multi-monitor, pausas | ✅ wallpaper por pantalla, HiDPI, hotplug |
-| 6 | plantillas para creadores | un extraño crea y comparte |
-| 7 | galería web (WASM/WebGPU) | previews vivos en el navegador |
+| 0 | workspace, CI, licenses, docs | ✅ this structure |
+| 1 | Wayland background window (niri first) | ✅ solid color behind everything |
+| 2 | wgpu + WGSL | ✅ fullscreen image |
+| 3 | runtime contract + hot-reload | ✅ animated shader edited live |
+| 4 | `.wallpaper` format | ✅ `pack` → `validate` → `install` → `run --package` |
+| 5 | multi-monitor, pauses | ✅ wallpaper per screen, HiDPI, hotplug |
+| 6 | creator templates | a stranger creates and shares |
+| 7 | web gallery (WASM/WebGPU) | live previews in the browser |
 
-## Compilar
-
-```bash
-cargo build          # compilar todo
-cargo test           # ejecutar los tests
-cargo run -p bruma   # probar la CLI
-```
-
-## Paquetes `.wallpaper`
-
-Un wallpaper se distribuye como un zip con `wallpaper.json`, una preview y
-sus shaders:
+## Building
 
 ```bash
-bruma pack mi-fondo/ -o mi-fondo.wallpaper   # empaquetar un directorio
-bruma validate mi-fondo.wallpaper            # validar (¿es seguro y correcto?)
-bruma install mi-fondo.wallpaper             # instalar en ~/.local/share/bruma
-bruma list                                   # ver lo instalado
-bruma run --package mi-fondo                 # usarlo como fondo
-bruma run --package mi-fondo --param=velocidad=0.8
+cargo build          # build everything
+cargo test           # run the tests
+cargo run -p bruma   # try the CLI
 ```
 
-El manifiesto declara parámetros con nombre que la CLI valida y resuelve:
+## `.wallpaper` packages
+
+A wallpaper ships as a zip with `wallpaper.json`, a preview and its
+shaders:
+
+```bash
+bruma pack my-wallpaper/ -o my-wallpaper.wallpaper   # pack a directory
+bruma validate my-wallpaper.wallpaper                # validate (safe and correct?)
+bruma install my-wallpaper.wallpaper                 # install into ~/.local/share/bruma
+bruma list                                           # see what's installed
+bruma run --package my-wallpaper                     # use it as the wallpaper
+bruma run --package my-wallpaper --param=speed=0.8
+```
+
+The manifest declares named parameters that the CLI validates and
+resolves:
 
 ```json
 {
   "format": 1,
   "type": "shader",
-  "title": "Mi fondo",
+  "title": "My wallpaper",
   "version": "0.1.0",
   "entry": "shader.wgsl",
   "preview": "preview.png",
-  "params": [{ "name": "velocidad", "label": "Velocidad", "default": 0.5 }],
+  "params": [{ "name": "speed", "label": "Speed", "default": 0.5 }],
   "fps": 30
 }
 ```
 
-La validación rechaza paquetes maliciosos: rutas con path traversal,
-symlinks dentro del zip y bombas de descompresión.
+Validation rejects malicious packages: path traversal routes, symlinks
+inside the zip and decompression bombs.
 
-## Licencia
+## License
 
-Doble licencia MIT / Apache-2.0, como el ecosistema Rust.
+Dual licensed MIT / Apache-2.0, like the Rust ecosystem.

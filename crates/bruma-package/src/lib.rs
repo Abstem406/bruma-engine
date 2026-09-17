@@ -1,15 +1,15 @@
 //! # bruma-package
 //!
-//! Formato abierto `.wallpaper` (D5): un ZIP con `wallpaper.json`,
-//! `preview.png`, shaders y assets.
+//! The open `.wallpaper` format (D5): a ZIP with `wallpaper.json`,
+//! `preview.png`, shaders and assets.
 //!
-//! Estado: **Fase 4**. Este crate implementa el schema del manifiesto
-//! (`format/type/title/entry/preview/permissions/min_engine`), la
-//! validación de seguridad (anti path-traversal, rechazo de symlinks,
-//! límites de tamaño) y las operaciones `pack` / `validate` / `install`.
+//! Status: **Phase 4**. This crate implements the manifest schema
+//! (`format/type/title/entry/preview/permissions/min_engine`), the
+//! security validation (anti path-traversal, symlink rejection, size
+//! limits) and the `pack` / `validate` / `install` operations.
 //!
-//! Frontera de dependencias (D6): nunca dependerá de wgpu, Wayland ni
-//! Steam. Solo formato: zip + serde_json.
+//! Dependency boundary (D6): it will never depend on wgpu, Wayland or
+//! Steam. Format only: zip + serde_json.
 
 #![forbid(unsafe_code)]
 

@@ -621,3 +621,46 @@ mixto quedó demostrado).
   escala fraccional (niri redondea a entero), posición real del cursor
   para `u_mouse`, fps de config solo al reiniciar. **Siguiente paso:**
   Fase 6 — herramientas para creadores (`bruma new`, plantillas WGSL).
+
+## 2026-09-17 — Corrección: el proyecto se documenta en inglés (D13)
+
+- **Contexto:** el usuario corrigió la convención del proyecto: código y
+  documentación pública van en **inglés** (D1: proyecto abierto para
+  otros). La entrada anterior de este día registró una "traducción al
+  español" como decisión propia — era una deriva de sesiones pasadas
+  commiteada sin cuestionarla contra la convención. Primera acción:
+  **revertir ese commit** (`0c7e47f` revierte `9738d13`, 43 tests en
+  verde) y luego traducir TODO lo que faltaba al inglés.
+- **Alcance acordado con el usuario:** código (comentarios, doc-comments,
+  mensajes de error, textos de CLI y logs) + docs públicas (README,
+  PLAN, DECISIONS). La bitácora queda en español: es el diario de
+  trabajo del autor, no una superficie pública.
+- **Renombres de API en español → inglés** (breaking interno, sin
+  callers externos): `BrumaError::{FormatoDesconocido,
+  ManifiestoInvalido}` → `{UnknownFormat, InvalidManifest}`;
+  `params_a_pares` → `params_to_pairs` (CLI); helpers de `pause.rs`
+  (`flags_a_pausa`, `upower_state_a_bateria`, `*_de_variant`) →
+  `flags_to_pause`, `upower_state_to_battery`, `*_from_variant`;
+  `Fuente`/`resolver_fuente`/`ModeloFuentes` →
+  `Source`/`resolve_source`/`SourceModel` (CLI); tests renombrados a
+  inglés y aserciones de texto de error actualizadas (`reservado` →
+  `reserved`, `insegura` → `unsafe`, `demasiado grande` → `too large`,
+  `duplicado` → `duplicate`).
+- **Decisiones de traducción tomadas (y por qué):** (a) los avisos de
+  burbuja D-Bus van al inglés (`bruma: shader rejected`) — son
+  visibles al usuario final de cualquier idioma; (b) los ejemplos JSON
+  de `config.json` y README conservan verbatim `onda-bruma-demo` e
+  `intensidad` — son los nombres REALES del paquete demo instalado;
+  traducirlos rompería el ejemplo; los params de manifiesto son
+  contenido del creador, no documentación del motor (D13 lo registra);
+  (c) los logs de runtime van al inglés también (salida operativa de un
+  proyecto abierto, mismo criterio que los errores).
+- **Limpieza de paso en `main.rs`** (muertos detectados al traducir):
+  un `push`+`pop` consecutivo que no hacía nada en `cli_overrides` y un
+  `let _ = &mut gpu;` sin efecto — ambos eliminados; el flag `--gpu`
+  sigue funcionando (se usa en `needs_gpu || gpu`).
+- **16 archivos Rust + 3 docs traducidos** (≈6,6k líneas revisadas).
+  **Gates:** fmt, clippy 0 warnings, 43 tests, `cargo install` OK.
+  Commit único: la traducción es un cambio de texto sin lógica nueva.
+- **Lección:** las convenciones viven en DECISIONS.md o no existen. D13
+  queda registrada para que la próxima sesión no repita la deriva.

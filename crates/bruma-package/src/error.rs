@@ -1,62 +1,62 @@
-//! Errores del formato `.wallpaper`.
+//! Errors of the `.wallpaper` format.
 
-/// Errores al cargar, validar, instalar o empaquetar un paquete.
+/// Errors when loading, validating, installing or packing a package.
 #[derive(Debug, thiserror::Error)]
 pub enum PackError {
-    /// El archivo no es un ZIP legible.
-    #[error("no es un ZIP válido: {0}")]
+    /// The file is not a readable ZIP.
+    #[error("not a valid ZIP: {0}")]
     Zip(#[from] zip::result::ZipError),
-    /// El manifiesto no parsea como JSON.
-    #[error("JSON inválido en {0}: {1}")]
+    /// The manifest does not parse as JSON.
+    #[error("invalid JSON in {0}: {1}")]
     Json(String, #[source] serde_json::Error),
-    /// Falta un archivo requerido en el paquete.
-    #[error("falta {0} en el paquete")]
+    /// A required file is missing from the package.
+    #[error("missing {0} in the package")]
     Missing(String),
-    /// La versión del schema no es la de este motor.
-    #[error("schema del manifiesto no soportado: format={0} (este motor habla format={1})")]
+    /// The schema version is not this engine's.
+    #[error("unsupported manifest schema: format={0} (this engine speaks format={1})")]
     Format(u32, u32),
-    /// El tipo está reservado (video/web) pero aún no se implementa.
-    #[error("tipo de wallpaper '{0}' reservado en el schema pero aún no implementado")]
+    /// The type is reserved (video/web) but not implemented yet.
+    #[error("wallpaper type '{0}' is reserved in the schema but not implemented yet")]
     ReservedType(String),
-    /// El tipo no existe en el schema.
-    #[error("tipo de wallpaper no soportado: '{0}' (implementado: shader)")]
+    /// The type does not exist in the schema.
+    #[error("unsupported wallpaper type: '{0}' (implemented: shader)")]
     BadType(String),
-    /// El entry no es una ruta segura con extensión .wgsl.
-    #[error("entry debe ser una ruta segura a un .wgsl, es '{0}'")]
+    /// The entry is not a safe path with a .wgsl extension.
+    #[error("entry must be a safe path to a .wgsl, got '{0}'")]
     BadEntry(String),
-    /// El preview no es una ruta segura a png/jpg.
-    #[error("preview debe ser una ruta segura a .png/.jpg, es '{0}'")]
+    /// The preview is not a safe path to png/jpg.
+    #[error("preview must be a safe path to .png/.jpg, got '{0}'")]
     BadPreview(String),
-    /// Ruta con escape del directorio del paquete (path traversal).
-    #[error("ruta insegura dentro del paquete: '{0}'")]
+    /// Path escaping the package directory (path traversal).
+    #[error("unsafe path inside the package: '{0}'")]
     UnsafePath(String),
-    /// El paquete contiene un symlink (vector clásico de escape).
-    #[error("symlink dentro del paquete: '{0}' (no se permiten)")]
+    /// The package contains a symlink (classic escape vector).
+    #[error("symlink inside the package: '{0}' (not allowed)")]
     Symlink(String),
-    /// Demasiados archivos.
-    #[error("demasiados archivos en el paquete: {0} (máximo {1})")]
+    /// Too many files.
+    #[error("too many files in the package: {0} (maximum {1})")]
     TooManyFiles(usize, usize),
-    /// Un archivo individual excede el límite (zip bomb).
-    #[error("archivo demasiado grande: {0} ({1} bytes máximo)")]
+    /// A single file exceeds the limit (zip bomb).
+    #[error("file too large: {0} ({1} bytes maximum)")]
     FileTooBig(String, u64),
-    /// El total descomprimido excede el límite (zip bomb).
-    #[error("paquete demasiado grande descomprimido: más de {0} bytes")]
+    /// The total decompressed size exceeds the limit (zip bomb).
+    #[error("package too large decompressed: more than {0} bytes")]
     TotalTooBig(u64),
-    /// Un parámetro del manifiesto es inválido.
-    #[error("parámetro inválido: {0}")]
+    /// A manifest parameter is invalid.
+    #[error("invalid parameter: {0}")]
     BadParam(String),
-    /// No hay ningún paquete instalado con ese nombre.
-    #[error("no hay ningún paquete instalado llamado '{0}'")]
+    /// There is no installed package with that name.
+    #[error("no installed package named '{0}'")]
     NotInstalled(String),
-    /// El paquete pide un motor más nuevo que este.
-    #[error("el paquete requiere motor >= {0} y este es {1}")]
+    /// The package asks for a newer engine than this one.
+    #[error("the package requires engine >= {0} and this is {1}")]
     Engine(String, String),
-    /// El título no permite derivar un identificador de instalación.
+    /// The title does not allow deriving an installation identifier.
     #[error(
-        "el título '{0}' no permite derivar un nombre de instalación (usa letras, números y espacios)"
+        "the title '{0}' does not allow deriving an install name (use letters, numbers and spaces)"
     )]
     BadTitle(String),
-    /// Error de E/S del sistema.
-    #[error("error de E/S: {0}")]
+    /// System I/O error.
+    #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

@@ -1,46 +1,46 @@
 //! # bruma-core
 //!
-//! Tipos base y contratos compartidos del motor bruma.
+//! Base types and shared contracts of the bruma engine.
 //!
-//! Este crate es **puro**: sin wgpu, sin Wayland, sin Steam, sin I/O de red.
-//! Todo lo que aquí se define debe poder compilarse a WASM sin cambios,
-//! para que la futura galería web reutilice el mismo núcleo.
+//! This crate is **pure**: no wgpu, no Wayland, no Steam, no network I/O.
+//! Everything defined here must compile to WASM unchanged, so the future
+//! web gallery can reuse the same core.
 //!
-//! Plan y decisiones de diseño: ver `PLAN.md` y `DECISIONS.md` en la raíz
-//! del repositorio.
+//! Plan and design decisions: see `PLAN.md` and `DECISIONS.md` at the
+//! repository root.
 
 #![forbid(unsafe_code)]
 
-/// Versión del motor, para el campo `min_engine` del manifiesto.
+/// Engine version, for the manifest's `min_engine` field.
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Errores comunes del núcleo, sin dependencias de I/O.
+/// Common core errors, with no I/O dependencies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrumaError {
-    /// El formato del paquete no es reconocido o está incompleto.
-    FormatoDesconocido,
-    /// El manifiesto no cumple el esquema.
-    ManifiestoInvalido(String),
+    /// The package format is not recognized or is incomplete.
+    UnknownFormat,
+    /// The manifest does not conform to the schema.
+    InvalidManifest(String),
 }
 
 impl core::fmt::Display for BrumaError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            BrumaError::FormatoDesconocido => write!(f, "formato de paquete no reconocido"),
-            BrumaError::ManifiestoInvalido(d) => write!(f, "manifiesto inválido: {d}"),
+            BrumaError::UnknownFormat => write!(f, "unrecognized package format"),
+            BrumaError::InvalidManifest(d) => write!(f, "invalid manifest: {d}"),
         }
     }
 }
 
 impl std::error::Error for BrumaError {}
 
-/// Resultado estándar del núcleo.
+/// Standard result of the core.
 pub type Result<T> = std::result::Result<T, BrumaError>;
 
-/// Color RGBA de 8 bits por canal, lineal en bytes.
+/// 8-bit-per-channel RGBA color, plain bytes layout.
 ///
-/// Lo define aquí el núcleo (crates sin dependencias) para que
-/// plataforma y renderizador compartan el mismo tipo sin acoplarse.
+/// Defined here in the core (dependency-free crates) so platform and
+/// renderer share the same type without coupling to each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
@@ -50,42 +50,42 @@ pub struct Color {
 }
 
 impl Default for Color {
-    /// Negro opaco (ni transparente: un fondo invisible no es un fondo).
+    /// Opaque black (not transparent: an invisible background is no background).
     fn default() -> Self {
         Color::rgb(0, 0, 0)
     }
 }
 
 impl Color {
-    /// Color opaco a partir de componentes RGB.
+    /// Opaque color from RGB components.
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Color { r, g, b, a: 0xFF }
     }
 
-    /// Convierte a `0xRRGGBB` (útil para logs y CLI).
+    /// Converts to `0xRRGGBB` (handy for logs and the CLI).
     pub const fn as_rgb_u32(self) -> u32 {
         ((self.r as u32) << 16) | ((self.g as u32) << 8) | self.b as u32
     }
 
-    /// Interpreta un entero `0xRRGGBB` como color opaco.
+    /// Interprets a `0xRRGGBB` integer as an opaque color.
     pub const fn from_rgb_u32(v: u32) -> Self {
         Color::rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
     }
 }
 
-/// Reservado: tipos de fondo soportados por el manifiesto.
+/// Reserved: wallpaper types supported by the manifest.
 ///
-/// Solo `shader` e `image` existen en la hoja de ruta cercana;
-/// `video` y `web` están reservados sin implementación (ver DECISIONS.md).
+/// Only `shader` and `image` exist in the near-term roadmap;
+/// `video` and `web` are reserved without implementation (see DECISIONS.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WallpaperType {
-    /// Imagen estática (Fase 2).
+    /// Static image (Phase 2).
     Image,
-    /// Fragment shader WGSL (Fases 2-3).
+    /// WGSL fragment shader (Phases 2-3).
     Shader,
-    /// Vídeo — reservado, no implementado.
+    /// Video — reserved, not implemented.
     Video,
-    /// Web (HTML/CSS/JS) — reservado, no implementado.
+    /// Web (HTML/CSS/JS) — reserved, not implemented.
     Web,
 }
 
@@ -94,20 +94,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_esta_definida() {
+    fn version_is_defined() {
         assert!(!ENGINE_VERSION.is_empty());
     }
 
     #[test]
-    fn error_se_formatea() {
+    fn error_formats() {
         assert_eq!(
-            BrumaError::ManifiestoInvalido("falta title".into()).to_string(),
-            "manifiesto inválido: falta title"
+            BrumaError::InvalidManifest("missing title".into()).to_string(),
+            "invalid manifest: missing title"
         );
     }
 
     #[test]
-    fn color_rgb_convierte() {
+    fn color_rgb_converts() {
         let c = Color::rgb(0x2E, 0x34, 0x40);
         assert_eq!(c.as_rgb_u32(), 0x2E3440);
         assert_eq!(Color::from_rgb_u32(0x3B4252), Color::rgb(0x3B, 0x42, 0x52));

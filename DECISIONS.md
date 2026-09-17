@@ -1,116 +1,132 @@
 # DECISIONS — bruma
 
-> Registro de decisiones de diseño, con su porqué. Orden: primero las
-> fundamentales. Si una decisión cambia, se añade una nueva entrada al
-> final y se marca la antigua como superada (nunca se borra la historia).
+> Design decision log, with the why. Order: fundamental ones first. If
+> a decision changes, a new entry is added at the end and the old one is
+> marked superseded (history is never erased).
 
-## D1 — Proyecto, no producto
-Es un proyecto personal abierto que otros podrán usar; no un producto con
-usuarios a los que servir. Esto libera de promesas de soporte y ritmo de
-release. **Consecuencia:** no publicar anuncios hasta tener releases
-mantenibles.
+## D1 — Project, not product
+An open personal project others will be able to use; not a product with
+users to serve. This frees us from support promises and release cadence.
+**Consequence:** no announcements until there are maintainable releases.
 
-## D2 — Rust nativo primero, web después
-La implementación es nativa (Rust). El experimento web (widgets HTML/CSS/JS)
-queda **diferido**: los webviews en Linux (WebKitGTK/CEF) son pesados para
-24/7 y diluyen la ventaja de rendimiento, que es el motivo de existir del
-proyecto. **Decisiones baratas tomadas hoy para no reescribir:** (a)
-`type: web` reservado en el manifiesto, (b) núcleo separado del renderizador,
-(c) API de runtime como trait, (d) WGSL ya corre en navegador vía WebGPU.
+## D2 — Native Rust first, web later
+The implementation is native (Rust). The web experiment (HTML/CSS/JS
+widgets) is **deferred**: webviews on Linux (WebKitGTK/CEF) are heavy for
+24/7 and dilute the performance advantage, which is the reason the project
+exists. **Cheap decisions taken today to avoid rewrites:** (a)
+`type: web` reserved in the manifest, (b) core separated from the
+renderer, (c) runtime API as a trait, (d) WGSL already runs in the
+browser via WebGPU.
 
-## D3 — wgpu + WGSL, nada de OpenGL
-Render con **wgpu** (Vulkan/Metal/DX12/GL fallback) y shaders en **WGSL**
-exclusivamente. Motivos: WGSL es idéntico en escritorio y navegador (la
-galería web reutiliza los shaders tal cual), wgpu es el estándar del
-ecosistema Rust y evita el OpenGL heredado. Nota: Wallpaper Engine original
-usa DirectX 10/11 (no OpenGL, que es solo su fallback); linux-wallpaperengine
-emula con OpenGL, pero este proyecto NO emula — es una reimaginación.
+## D3 — wgpu + WGSL, no OpenGL
+Render with **wgpu** (Vulkan/Metal/DX12/GL fallback) and shaders in
+**WGSL** exclusively. Reasons: WGSL is identical on desktop and browser
+(the web gallery reuses the shaders as is), wgpu is the Rust ecosystem
+standard and avoids legacy OpenGL. Note: the original Wallpaper Engine
+uses DirectX 10/11 (not OpenGL, which is only its fallback);
+linux-wallpaperengine emulates with OpenGL, but this project does NOT
+emulate — it is a reimagining.
 
-## D4 — Solo Wayland; niri primero
-v1 solo Wayland vía `wlr-layer-shell` con **smithay-client-toolkit**
-(winit no soporta layer-shell; swww usa sctk por eso). **niri es el banco
-de pruebas de referencia** (el entorno del autor, con DankMaterialShell);
-Hyprland/sway/KWin best-effort. **GNOME/Mutter non-goal en v1** (no soporta
-layer-shell) — se documentará como requisito para evitar issues.
+## D4 — Wayland only; niri first
+v1 is Wayland only via `wlr-layer-shell` with **smithay-client-toolkit**
+(winit does not support layer-shell; swww uses sctk for that reason).
+**niri is the reference test bench** (the author's environment, with
+DankMaterialShell); Hyprland/sway/KWin best-effort. **GNOME/Mutter is a
+v1 non-goal** (no layer-shell) — it will be documented as a requirement
+to avoid issues.
 
-## D5 — Formato abierto .wallpaper, sin marca
-El paquete se llama `.wallpaper` (zip con `wallpaper.json`, `preview.png`,
-shaders, assets) — nombre genérico de ecosistema, como `.lively`. El nombre
-de marca (bruma) queda para el motor. Precedente: Lively demostró que el
-contenido comunitario no necesita Steam Workshop (drag-and-drop, foros).
+## D5 — Open .wallpaper format, unbranded
+The package is called `.wallpaper` (zip with `wallpaper.json`,
+`preview.png`, shaders, assets) — a generic ecosystem name, like
+`.lively`. The brand name (bruma) stays with the engine. Precedent:
+Lively proved community content does not need Steam Workshop
+(drag-and-drop, forums).
 
-## D6 — Frontera de dependencias del core
-`bruma-core`, `bruma-package` y `bruma-runtime` **nunca** dependerán de
-wgpu, Wayland ni Steam. Motivos: (1) compilar a WASM para la galería,
-(2) poder testear sin GPU ni compositor, (3) mantener el SDK de Steam fuera
-del FOSS si algún día hay versión Steam (`steamworks-rs` en crate opcional).
-En Fase 0 los crates `renderer` y `platform` también nacen sin dependencias
-(contratos vacíos); sus implementaciones pesadas irán en crates separados.
+## D6 — Core dependency boundary
+`bruma-core`, `bruma-package` and `bruma-runtime` will **never** depend
+on wgpu, Wayland or Steam. Reasons: (1) compile to WASM for the gallery,
+(2) test without GPU or compositor, (3) keep the Steam SDK out of the
+FOSS if a Steam version ever exists (`steamworks-rs` in an optional
+crate). In Phase 0 the `renderer` and `platform` crates are also born
+without dependencies (empty contracts); their heavy implementations go
+in separate crates.
 
-## D7 — GitHub primero, Steam quizá después
-Distribución inicial solo GitHub. Steam (tarifa ~$100/app, SDK propietario)
-es un acelerador posiblemente futuro, no un objetivo. Si llega: mismo
-formato `.wallpaper` en ambos canales para no dividir la comunidad.
+## D7 — GitHub first, Steam maybe later
+Initial distribution is GitHub only. Steam (~$100/app fee, proprietary
+SDK) is a possibly future accelerator, not a goal. If it arrives: same
+`.wallpaper` format on both channels to avoid splitting the community.
 
-## D8 — Modelo de trabajo IA-implementa / humano-revisa
-El autor no revisa línea a línea: revisa demos. Reglas: una tarea = una
-demo, commits pequeños, nunca aceptar código que no corra, guardar
-capturas/logs, auditar dependencias. El detalle de cada sesión queda en
+## D8 — Workflow model: AI-implements / human-reviews
+The author does not review line by line: they review demos. Rules: one
+task = one demo, small commits, never accept code that does not run,
+keep captures/logs, audit dependencies. Session details live in
 [ai-development-log.md](ai-development-log.md).
 
-## D9 — Nombre: bruma
-- Repo/proyecto: **bruma-engine** (libre en crates.io y GitHub).
-- Binario/CLI: **bruma** (`bruma run`, `bruma install`, `bruma new`).
+## D9 — Name: bruma
+- Repo/project: **bruma-engine** (free on crates.io and GitHub).
+- Binary/CLI: **bruma** (`bruma run`, `bruma install`, `bruma new`).
 - Crates: `bruma-core`, `bruma-package`, `bruma-runtime`,
   `bruma-renderer(-wgpu)`, `bruma-platform`.
-- Formato: `.wallpaper` (sin marca, ver D5).
-- Tagline: "Motor libre de wallpapers animados para Wayland".
-- Evoca: niebla/atmósfera — encaja con fondos ambientados con shaders.
+- Format: `.wallpaper` (unbranded, see D5).
+- Tagline: "Free animated wallpaper engine for Wayland".
+- Evokes: mist/atmosphere — fits ambient shader wallpapers.
 
-## D10 — Vídeo y audio fuera de la v1
-Vídeo (mpv/GStreamer) y captura de audio (PipeWire) arrastran dependencias
-enormes y casos de uso distintos. Reservados en el manifiesto (`type: video`),
-implementación futura. Audio como input de shaders: opcional y apagado por
-defecto (privacidad) cuando llegue.
+## D10 — Video and audio out of v1
+Video (mpv/GStreamer) and audio capture (PipeWire) drag in huge
+dependencies and different use cases. Reserved in the manifest
+(`type: video`), future implementation. Audio as shader input: optional
+and off by default (privacy) when it arrives.
 
-## D11 — Notificaciones de escritorio vía D-Bus, best-effort
-- Qué: los avisos al usuario (shader rechazado/recuperado en hot-reload)
-  van por `org.freedesktop.Notifications` (mako, dunst, quickshell/DMS...)
-  con el crate `dbus` 0.9 (dlopen de libdbus: sin bindgen ni dep de build).
-- Política: **best-effort estricto**. Sin bus de sesión, el canal se
-  degrada a no-op; el envío tiene timeout de 300 ms; ningún error de
-  notificación puede afectar al render ni al proceso. Un wallpaper no
-  falla por su canal de avisos.
-- Arquitectura: el renderer emite eventos tipados (`ReloadEvent`:
-  Applied/Rejected/Recovered con dedup de autosaves idénticos); la CLI
-  decide qué hacer con ellos (hoy: notificar con debounce de 2 s). Así
-  la capa gráfica no conoce D-Bus y la futura UI (Fase 6) podrá
-  consumir los mismos eventos.
-- Urgencia "normal" siempre: los avisos de bruma nunca son críticos.
+## D11 — Desktop notifications via D-Bus, best-effort
+- What: user notices (shader rejected/recovered on hot-reload) go over
+  `org.freedesktop.Notifications` (mako, dunst, quickshell/DMS...) with
+  the `dbus` 0.9 crate (libdbus dlopen: no bindgen, no build dep).
+- Policy: **strict best-effort**. Without a session bus, the channel
+  degrades to no-op; sends have a 300 ms timeout; no notification error
+  may affect the render or the process. A wallpaper does not fail
+  because of its notice channel.
+- Architecture: the renderer emits typed events (`ReloadEvent`:
+  Applied/Rejected/Recovered with dedup of identical autosaves); the CLI
+  decides what to do with them (today: notify with a 2 s debounce). That
+  way the graphics layer knows nothing about D-Bus and the future UI
+  (Phase 6) can consume the same events.
+- "Normal" urgency always: bruma notices are never critical.
 
-## D12 — Pausas del motor: fullscreen por salida, bloqueo y batería globales
-- Qué: el motor deja de repintar cuando el fondo no se ve o no vale la
-  GPU/batería gastarlo. Tres fuentes, dos alcances:
-  - **Por salida**: ventana fullscreen sobre esa salida (protocolo
-    `wlr-foreign-toplevel-management`). `maximized` NO pausa: en varios
-    compositors no cubre el fondo y sería pausar algo visible.
-  - **Global**: sesión bloqueada (logind: señales `Lock`/`Unlock` +
-    `LockedHint` como segunda fuente) y en batería (UPower
-    `DisplayDevice.State == 2`). Pausan TODAS las salidas.
-- Política: **best-effort estricto** (mismo espíritu que D11). Sin bus
-  de sistema o sin logind/UPower, esa fuente degrada a "nunca pausa";
-  el motor no cambia. El runtime NUNCA se pausa: el tiempo global sigue
-  y al despausar la animación retoma sin salto.
-- Descubrimiento clave (verificado en el sistema, no en memoria):
-  logind ESCAPA los IDs en los object paths (sesión "4" →
-  `/org/freedesktop/login1/session/_34`) y las señales se emiten por el
-  path escapado. Además `GetSessionByPID` es inservible para esto: los
-  compositors Wayland corren como servicios de usuario, fuera del
-  alcance de sesión de logind. Sesión gráfica correcta:
-  `ListSessions` + `Type="wayland"`.
-- Drenaje de señales sin hilos: `SyncConnection::process(Duration::ZERO)`
-  con cota de 32 iteraciones por frame (ráfagas absorbidAs, spin
-  imposible); el watcher vive en el hilo del bucle de frames.
-- Verificación por CPU (ticks de /proc), no por capturas: el fullscreen
-  y las ventanas cambian la imagen; la CPU del proceso es la señal
-  limpia. 35 ticks/8s → 1-2 ticks/8s al pausar; reanudación exacta.
+## D12 — Engine pauses: per-output fullscreen, global lock and battery
+- What: the engine stops repainting when the wallpaper is not visible or
+  is not worth the GPU/battery. Three sources, two scopes:
+  - **Per output**: fullscreen window over that output (the
+    `wlr-foreign-toplevel-management` protocol). `maximized` does NOT
+    pause: on several compositors it does not cover the wallpaper and it
+    would pause something visible.
+  - **Global**: session locked (logind: `Lock`/`Unlock` signals +
+    `LockedHint` as a second source) and on battery (UPower
+    `DisplayDevice.State == 2`). They pause ALL outputs.
+- Policy: **strict best-effort** (same spirit as D11). Without a system
+  bus or without logind/UPower, that source degrades to "never pauses";
+  the engine does not change. The runtime is NEVER paused: global time
+  goes on and on unpause the animation resumes without a jump.
+- Key discovery (verified on the system, not from memory): logind
+  ESCAPES IDs in object paths (session "4" →
+  `/org/freedesktop/login1/session/_34`) and signals are emitted on the
+  escaped path. Also `GetSessionByPID` is useless for this: Wayland
+  compositors run as user services, outside logind's session scope.
+  Correct graphical session: `ListSessions` + `Type="wayland"`.
+- Threadless signal draining: `SyncConnection::process(Duration::ZERO)`
+  capped at 32 iterations per frame (bursts absorbed, spinning
+  impossible); the watcher lives on the frame loop's thread.
+- Verification by CPU (/proc ticks), not captures: fullscreen and
+  windows change the image; the process's CPU is the clean signal.
+  35 ticks/8s → 1-2 ticks/8s when paused; exact resume.
+
+## D13 — Language: everything documented in English
+- What: all code and public documentation is written in English —
+  doc-comments, inline comments, error messages, CLI text, README, PLAN
+  and DECISIONS. The AI development log (`ai-development-log.md`) stays
+  in Spanish: it is the author's working journal, not a public surface.
+- Why: D1 makes this an open project others will use; English maximizes
+  who can read, file issues and contribute. Error messages are an
+  observable contract; mixed languages in an open codebase age badly.
+- Consequence: manifest `param` names and other user-facing identifiers
+  in packages may be any language (they are content, not documentation);
+  the engine's own surfaces stay English-only.

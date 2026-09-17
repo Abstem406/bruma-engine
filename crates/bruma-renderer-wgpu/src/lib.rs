@@ -1,23 +1,24 @@
 //! # bruma-renderer-wgpu
 //!
-//! Implementación del contrato de renderizado con **wgpu + WGSL** (D3).
+//! Rendering contract implementation with **wgpu + WGSL** (D3).
 //!
-//! Estado: **Fase 3**. Progresión: triángulo ✅ → imagen ✅ → shader
-//! animado con límite de FPS y hot-reload de WGSL.
+//! Status: **Phase 3**. Progression: triangle ✅ → image ✅ → animated
+//! shader with FPS cap and WGSL hot-reload.
 //!
-//! Frontera con la plataforma: este crate no sabe nada de Wayland. Recibe
-//! punteros crudos (`wl_display`, `wl_surface`) y los traduce a handles de
-//! `raw-window-handle` para wgpu. `bruma-platform` es quien sabe sacarlos.
+//! Platform boundary: this crate knows nothing about Wayland. It receives
+//! raw pointers (`wl_display`, `wl_surface`) and turns them into
+//! `raw-window-handle` handles for wgpu. `bruma-platform` is the one that
+//! knows how to extract them.
 //!
-//! # Seguridad
+//! # Safety
 //!
-//! Este crate contiene el único bloque `unsafe` del motor: crear la
-//! superficie de wgpu a partir de punteros crudos. Los invariantes son:
-//! - El `wl_display` y el `wl_surface` deben permanecer vivos mientras
-//!   exista la `wgpu::Surface` (garantizado por el dueño de la conexión:
-//!   `BackgroundWindow` vive más que el renderer en la composición).
-//! - Los punteros deben ser válidos (salen de proxies vivos de
-//!   wayland-client).
+//! This crate contains the engine's only `unsafe` block: creating the
+//! wgpu surface from raw pointers. The invariants are:
+//! - The `wl_display` and `wl_surface` must stay alive while the
+//!   `wgpu::Surface` exists (guaranteed by the connection's owner:
+//!   `BackgroundWindow` outlives the renderer in the composition).
+//! - The pointers must be valid (they come from live wayland-client
+//!   proxies).
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -27,51 +28,51 @@ use std::ptr::NonNull;
 use bruma_renderer::FrameRenderer;
 use bruma_renderer::FrameState;
 
-/// Alias del contrato de frames para consumidores del crate (la CLI
-/// anota tipos con esto sin depender directamente de bruma-renderer).
+/// Alias of the frame contract for crate consumers (the CLI annotates
+/// types with this without depending directly on bruma-renderer).
 pub use bruma_renderer::FrameRenderer as FrameRendererAlias;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 
-/// Errores del renderer.
+/// Renderer errors.
 #[derive(Debug, thiserror::Error)]
 pub enum RendererError {
-    /// No hay adaptador GPU compatible (¿Vulkan disponible?).
-    #[error("no se encontró adaptador GPU compatible: {0}")]
+    /// No compatible GPU adapter (is Vulkan available?).
+    #[error("no compatible GPU adapter found: {0}")]
     NoAdapter(String),
-    /// No se pudo crear el dispositivo lógico.
-    #[error("no se pudo crear el dispositivo wgpu: {0}")]
+    /// The logical device could not be created.
+    #[error("could not create the wgpu device: {0}")]
     Device(String),
-    /// La superficie no soporta ningún formato de textura.
-    #[error("la superficie no soporta ningún formato")]
+    /// The surface supports no texture format.
+    #[error("the surface supports no formats")]
     NoSurfaceFormats,
-    /// No se pudo cargar la imagen.
-    #[error("error cargando imagen: {0}")]
+    /// The image could not be loaded.
+    #[error("error loading image: {0}")]
     Image(String),
-    /// No se pudo leer el archivo de shader.
-    #[error("error leyendo el shader {}: {0}", path.display())]
+    /// The shader file could not be read.
+    #[error("error reading shader {}: {0}", path.display())]
     ShaderIo {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    /// El shader WGSL no compila (mensaje de naga/wgpu).
-    #[error("error compilando el shader: {0}")]
+    /// The WGSL shader does not compile (naga/wgpu message).
+    #[error("error compiling shader: {0}")]
     ShaderCompile(String),
 }
 
-/// Bloque de uniforms del shader animado (48 bytes, sin relleno).
+/// Uniform block of the animated shader (48 bytes, no padding).
 ///
-/// Layout en GPU (igual que `Uniforms` en los shaders):
+/// GPU layout (same as `Uniforms` in the shaders):
 /// ```text
 /// offset 0:  u_time    f32
 /// offset 4:  u_params0 f32
 /// offset 8:  u_mouse   vec2f
 /// offset 16: u_params  vec4f (u_params0..3)
 /// offset 32: u_res     vec2f
-/// offset 40: (relleno final: WGSL redondea el tamaño de una struct
-///             de uniform a múltiplo de 16 → 48 bytes)
+/// offset 40: (end padding: WGSL rounds a uniform struct's size up to a
+///             multiple of 16 → 48 bytes)
 /// ```
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -84,34 +85,36 @@ struct Uniforms {
     _pad_end: [f32; 2],
 }
 
-// El bloque se sube a GPU como bytes crudos: sin relleno, por construcción.
+// The block is uploaded to the GPU as raw bytes: padding-free by
+// construction.
 const _: () = assert!(size_of::<Uniforms>() as u64 == UNIFORM_SIZE);
 
 impl Uniforms {
-    /// Vista de bytes del bloque (para `Queue::write_buffer`).
+    /// Byte view of the block (for `Queue::write_buffer`).
     fn as_bytes(&self) -> &[u8] {
-        // SAFETY: `Uniforms` es #[repr(C)] de f32 puros (32 bytes sin
-        // padding, verificado arriba) y el slice resultante solo se lee.
+        // SAFETY: `Uniforms` is a #[repr(C)] of plain f32s (48 bytes
+        // without padding, verified above) and the resulting slice is
+        // only read.
         unsafe { std::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
     }
 }
 
-/// Layout de la configuración compartida entre plataforma y runtime.
+/// Layout constant shared between platform and runtime.
 const UNIFORM_SIZE: u64 = 48;
 
-/// Construye el pipeline de quad (topología `TriangleStrip`, blending
-/// `REPLACE`, vértices generados en el WGSL) para un módulo ya compilado
-/// y su bind group layout.
+/// Builds the quad pipeline (`TriangleStrip` topology, `REPLACE` blend,
+/// vertices generated in the WGSL) for an already compiled module and its
+/// bind group layout.
 ///
-/// Pura respecto de superficies: solo conoce device y formato de destino.
-/// Así [`crate::AnimatedRenderer`] y los tests de cobertura usan el MISMO
-/// código — el test valida el pipeline de producción, no una copia.
+/// Pure with respect to surfaces: it only knows the device and the target
+/// format. So [`crate::AnimatedRenderer`] and the coverage tests use the
+/// SAME code — the test validates the production pipeline, not a copy.
 ///
-/// Geometría (contrato con los shaders): 4 vértices en orden strip
-/// (TL, TR, BL, BR → triángulos 0-1-2 y 1-2-3); `draw(0..3)` para el demo
-/// de triángulo es idéntico en strip. Historia: con `TriangleList` solo
-/// se dibujaba el primer triángulo — mitad de pantalla sin pintar durante
-/// las Fases 2-4, invisible a las verificaciones que solo medían (5,5).
+/// Geometry (contract with the shaders): 4 vertices in strip order (TL,
+/// TR, BL, BR → triangles 0-1-2 and 1-2-3); `draw(0..3)` for the triangle
+/// demo is identical under strip. History: with `TriangleList` only the
+/// first triangle was drawn — half the screen unpainted during Phases
+/// 2-4, invisible to verifications that only measured (5,5).
 pub fn build_quad_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
@@ -154,15 +157,15 @@ pub fn build_quad_pipeline(
     })
 }
 
-/// Contexto GPU **compartido entre salidas** (Fase 5): instancia,
-/// adaptador, device y queue. `Device`/`Queue`/`Instance`/`Adapter` son
-/// `Arc` internos (`Clone`): una sola GPU sirve a todas las superficies —
-/// lo contrario (un device por salida) multiplica VRAM del driver.
+/// GPU context **shared across outputs** (Phase 5): instance, adapter,
+/// device and queue. `Device`/`Queue`/`Instance`/`Adapter` are inner
+/// `Arc`s (`Clone`): a single GPU serves all surfaces — the opposite (one
+/// device per output) multiplies driver VRAM.
 ///
-/// Elección de adaptador: `LowPower` deliberado — bruma corre 24/7 y en
-/// sistemas híbridos (iGPU + dGPU) conviene que la dedicada duerma.
-/// FUTURO: selección explícita por config/CLI en lugar de dejar la
-/// decisión al driver.
+/// Adapter choice: `LowPower` deliberately — bruma runs 24/7 and on
+/// hybrid systems (iGPU + dGPU) the discrete one is better left asleep.
+/// FUTURE: explicit selection via config/CLI instead of leaving it to the
+/// driver.
 #[derive(Clone)]
 pub struct GpuShared {
     instance: wgpu::Instance,
@@ -172,8 +175,8 @@ pub struct GpuShared {
 }
 
 impl GpuShared {
-    /// Descubre el adaptador y crea el device compartido (sin superficie:
-    /// sirve para cualquier salida que llegue después).
+    /// Discovers the adapter and creates the shared device (no surface:
+    /// it serves any output arriving later).
     pub fn new() -> Result<Self, RendererError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
@@ -196,7 +199,7 @@ impl GpuShared {
         .map_err(|e| RendererError::Device(e.to_string()))?;
         let info = adapter.get_info();
         log::info!(
-            "wgpu: adaptador {} ({:?}), backend {:?} (compartido entre salidas)",
+            "wgpu: adapter {} ({:?}), backend {:?} (shared across outputs)",
             info.name,
             info.device_type,
             info.backend
@@ -220,15 +223,15 @@ impl GpuShared {
 
 impl Default for GpuShared {
     fn default() -> Self {
-        Self::new().expect("adaptador GPU disponible (¿Vulkan?)")
+        Self::new().expect("GPU adapter available (is Vulkan up?)")
     }
 }
 
-/// Superficie wgpu de UNA salida, sobre el [`GpuShared`] compartido.
+/// wgpu surface of ONE output, on the shared [`GpuShared`].
 ///
-/// Une la superficie Wayland cruda con su configuración (formato elegido
-/// por salida — pueden diferir — y tamaño). Es lo único por-salida; el
-/// device/queue son compartidos.
+/// Joins the raw Wayland surface with its configuration (per-output
+/// chosen format — they may differ — and size). It is the only per-output
+/// thing; device/queue are shared.
 pub struct SurfaceCtx {
     shared: GpuShared,
     surface: wgpu::Surface<'static>,
@@ -236,19 +239,19 @@ pub struct SurfaceCtx {
     configured_size: (u32, u32),
 }
 
-// SAFETY: los punteros crudos deben ser válidos y el display/surface
-// deben sobrevivir a la wgpu::Surface resultante; el caller (bruma CLI)
-// garantiza el orden de dropeo: conexión Wayland > renderers.
+// SAFETY: the raw pointers must be valid and the display/surface must
+// outlive the resulting wgpu::Surface; the caller (bruma CLI) guarantees
+// the drop order: Wayland connection > renderers.
 impl SurfaceCtx {
-    /// Crea la superficie sobre la conexión Wayland indicada y elige el
-    /// formato de swapchain (el primero soportado por esta salida).
+    /// Creates the surface over the given Wayland connection and picks
+    /// the swapchain format (the first one this output supports).
     ///
     /// # Safety
     ///
-    /// Igual que [`wgpu::Instance::create_surface_unsafe`]: los punteros
-    /// deben ser válidos y el display/surface deben sobrevivir a la
-    /// `wgpu::Surface` resultante. El caller garantiza el orden de
-    /// dropeo: conexión Wayland > `SurfaceCtx`.
+    /// Same as [`wgpu::Instance::create_surface_unsafe`]: the pointers
+    /// must be valid and the display/surface must outlive the resulting
+    /// `wgpu::Surface`. The caller guarantees the drop order: Wayland
+    /// connection > `SurfaceCtx`.
     pub unsafe fn new_wayland(
         shared: &GpuShared,
         display_ptr: NonNull<std::ffi::c_void>,
@@ -272,7 +275,7 @@ impl SurfaceCtx {
             .first()
             .copied()
             .ok_or(RendererError::NoSurfaceFormats)?;
-        log::debug!("formato de superficie (salida): {format:?}");
+        log::debug!("surface format (output): {format:?}");
 
         Ok(Self {
             shared: shared.clone(),
@@ -282,7 +285,7 @@ impl SurfaceCtx {
         })
     }
 
-    /// Configura (o reconfigura) la superficie al tamaño dado.
+    /// Configures (or reconfigures) the surface at the given size.
     pub fn configure(&mut self, width: u32, height: u32) {
         if self.configured_size == (width, height) {
             return;
@@ -304,8 +307,8 @@ impl SurfaceCtx {
         self.configured_size = (width, height);
     }
 
-    /// Obtiene la textura del frame actual, gestionando estados
-    /// transitorios (reconfigura tras Outdated/Lost en el próximo frame).
+    /// Acquires the current frame's texture, handling transient states
+    /// (reconfigures after Outdated/Lost on the next frame).
     pub fn acquire_frame(&mut self) -> Option<wgpu::SurfaceTexture> {
         match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
@@ -316,7 +319,7 @@ impl SurfaceCtx {
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => None,
             wgpu::CurrentSurfaceTexture::Validation => {
-                log::error!("wgpu: validación fallida al obtener textura");
+                log::error!("wgpu: validation failed while acquiring the texture");
                 None
             }
         }
@@ -334,27 +337,27 @@ impl SurfaceCtx {
         &self.shared.queue
     }
 
-    /// Presenta el frame (submit + present).
+    /// Presents the frame (submit + present).
     pub fn submit_and_present(&self, encoder: wgpu::CommandEncoder, frame: wgpu::SurfaceTexture) {
         self.shared.queue.submit([encoder.finish()]);
         self.shared.queue.present(frame);
     }
 }
 
-/// Renderer de la Fase 2, paso 1: un triángulo WGSL a pantalla completa.
+/// Phase 2 renderer, step 1: a fullscreen WGSL triangle.
 pub struct WgpuRenderer {
     surface: SurfaceCtx,
     pipeline: wgpu::RenderPipeline,
 }
 
 impl WgpuRenderer {
-    /// Crea el renderer del triángulo sobre la superficie Wayland dada.
+    /// Creates the triangle renderer over the given Wayland surface.
     ///
     /// # Safety
     ///
-    /// Igual que [`SurfaceCtx::new_wayland`]: los punteros deben ser
-    /// válidos y sobrevivir a la superficie; el caller garantiza el orden
-    /// de dropeo conexión > renderer.
+    /// Same as [`SurfaceCtx::new_wayland`]: the pointers must be valid
+    /// and outlive the surface; the caller guarantees the drop order
+    /// connection > renderer.
     pub unsafe fn new_wayland(
         display_ptr: NonNull<std::ffi::c_void>,
         surface_ptr: NonNull<std::ffi::c_void>,
@@ -363,12 +366,12 @@ impl WgpuRenderer {
         unsafe { Self::on_shared(&shared, display_ptr, surface_ptr) }
     }
 
-    /// Crea el renderer del triángulo sobre GPU compartida (Fase 5:
-    /// multi-salida). `new_wayland` es el envoltorio de un renderer solo.
+    /// Creates the triangle renderer on a shared GPU (Phase 5:
+    /// multi-output). `new_wayland` is the single-renderer wrapper.
     ///
     /// # Safety
     ///
-    /// Igual que [`SurfaceCtx::new_wayland`].
+    /// Same as [`SurfaceCtx::new_wayland`].
     pub unsafe fn on_shared(
         shared: &GpuShared,
         display_ptr: NonNull<std::ffi::c_void>,
@@ -379,7 +382,7 @@ impl WgpuRenderer {
         let shader = surface
             .device()
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("bruma-triangulo"),
+                label: Some("bruma-triangle"),
                 source: wgpu::ShaderSource::Wgsl(include_str!("shaders/triangle.wgsl").into()),
             });
 
@@ -413,10 +416,10 @@ impl WgpuRenderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                // Los quads de los shaders son 4 vértices en orden strip
-                // (TL, TR, BL, BR → triángulos 0-1-2 y 1-2-3); el demo del
-                // triángulo (draw 0..3) es idéntico en strip. Con list solo
-                // se dibujaba el primer triángulo: mitad de pantalla negra.
+                // Shader quads are 4 vertices in strip order (TL, TR, BL,
+                // BR → triangles 0-1-2 and 1-2-3); the triangle demo
+                // (draw 0..3) is identical under strip. With list, only
+                // the first triangle was drawn: half the screen black.
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleStrip,
                     ..Default::default()
@@ -476,12 +479,12 @@ impl FrameRenderer for WgpuRenderer {
     }
 }
 
-/// Renderer de la Fase 2, paso 2: imagen (PNG/JPEG) a pantalla completa.
+/// Phase 2 renderer, step 2: fullscreen image (PNG/JPEG).
 ///
-/// La imagen se sube una única vez como textura RGBA8 (sRGB); un quad
-/// cubre la pantalla y el shader la muestrea. La relación de aspecto NO
-/// se corrige aún: la imagen se estira al tamaño de la pantalla (decisión
-/// pendiente para el manifiesto de `.wallpaper`: cover/contain/estirar).
+/// The image is uploaded once as an RGBA8 (sRGB) texture; a quad covers
+/// the screen and the shader samples it. The aspect ratio is NOT
+/// corrected yet: the image is stretched to the screen size (pending
+/// decision for the `.wallpaper` manifest: cover/contain/stretch).
 pub struct ImageRenderer {
     surface: SurfaceCtx,
     pipeline: wgpu::RenderPipeline,
@@ -489,13 +492,13 @@ pub struct ImageRenderer {
 }
 
 impl ImageRenderer {
-    /// Crea el renderer de imagen sobre la superficie Wayland dada.
+    /// Creates the image renderer over the given Wayland surface.
     ///
     /// # Safety
     ///
-    /// Igual que [`SurfaceCtx::new_wayland`]: los punteros deben ser
-    /// válidos y sobrevivir a la superficie; el caller garantiza el orden
-    /// de dropeo conexión > renderer.
+    /// Same as [`SurfaceCtx::new_wayland`]: the pointers must be valid
+    /// and outlive the surface; the caller guarantees the drop order
+    /// connection > renderer.
     pub unsafe fn new_wayland(
         display_ptr: NonNull<std::ffi::c_void>,
         surface_ptr: NonNull<std::ffi::c_void>,
@@ -505,13 +508,13 @@ impl ImageRenderer {
         unsafe { Self::on_shared(&shared, display_ptr, surface_ptr, image_path) }
     }
 
-    /// Crea el renderer de imagen sobre GPU compartida (Fase 5:
-    /// multi-salida): la textura se sube por salida (es pequeña al lado
-    /// del device duplicado que evitamos).
+    /// Creates the image renderer on a shared GPU (Phase 5:
+    /// multi-output): the texture is uploaded per output (it is small
+    /// next to the duplicated device we avoid).
     ///
     /// # Safety
     ///
-    /// Igual que [`SurfaceCtx::new_wayland`].
+    /// Same as [`SurfaceCtx::new_wayland`].
     pub unsafe fn on_shared(
         shared: &GpuShared,
         display_ptr: NonNull<std::ffi::c_void>,
@@ -523,7 +526,7 @@ impl ImageRenderer {
         let img = image::open(image_path).map_err(|e| RendererError::Image(e.to_string()))?;
         let rgba = img.to_rgba8();
         let (iw, ih) = (rgba.width(), rgba.height());
-        log::info!("textura de imagen: {iw}x{ih}px");
+        log::info!("image texture: {iw}x{ih}px");
 
         let texture = ctx.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("bruma-image"),
@@ -540,7 +543,7 @@ impl ImageRenderer {
             view_formats: &[],
         });
 
-        // Subida única de la imagen (RGBA8, 4 bytes por píxel).
+        // Single image upload (RGBA8, 4 bytes per pixel).
         ctx.queue().write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -647,10 +650,10 @@ impl ImageRenderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                // Los quads de los shaders son 4 vértices en orden strip
-                // (TL, TR, BL, BR → triángulos 0-1-2 y 1-2-3); el demo del
-                // triángulo (draw 0..3) es idéntico en strip. Con list solo
-                // se dibujaba el primer triángulo: mitad de pantalla negra.
+                // Shader quads are 4 vertices in strip order (TL, TR, BL,
+                // BR → triangles 0-1-2 and 1-2-3); the triangle demo
+                // (draw 0..3) is identical under strip. With list, only
+                // the first triangle was drawn: half the screen black.
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleStrip,
                     ..Default::default()
@@ -715,15 +718,15 @@ impl FrameRenderer for ImageRenderer {
     }
 }
 
-/// Carga y valida un módulo WGSL, devolviendo errores de compilación con
-/// el mensaje de naga (independiente de la feature `fragile-send-sync-non-atomic-wgpu`).
-/// Compila WGSL con validación síncrona de naga y mensajes de error
-/// útiles (línea/columna). Pública para que los tests usen el mismo
-/// camino que la producción.
+/// Loads and validates a WGSL module, returning compile errors with
+/// naga's message (independent of the
+/// `fragile-send-sync-non-atomic-wgpu` feature). Compiles WGSL with
+/// synchronous naga validation and useful error messages (line/column).
+/// Public so tests use the same path as production.
 ///
-/// La validación es síncrona: se valida el fuente directamente con naga
-/// (la dependencia de compilación de wgpu, ya en el árbol) ANTES de
-/// crear el módulo GPU. Un shader inválido nunca llega a la GPU.
+/// Validation is synchronous: the source is validated directly with naga
+/// (wgpu's compile-time dependency, already in the tree) BEFORE creating
+/// the GPU module. An invalid shader never reaches the GPU.
 pub fn compile_wgsl(
     device: &wgpu::Device,
     source: &str,
@@ -740,83 +743,84 @@ pub fn compile_wgsl(
         .map_err(|e| RendererError::ShaderCompile(format!("{e}")))?;
     let _ = info;
 
-    // Con el fuente ya validado, la creación del módulo GPU no puede
-    // fallar por compilación (los error scopes cubrirían errores de
-    // validación de la API, que aquí no aplican).
+    // With the source already validated, GPU module creation cannot fail
+    // on compilation (error scopes would cover API validation errors,
+    // which do not apply here).
     Ok(device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
         source: wgpu::ShaderSource::Wgsl(source.into()),
     }))
 }
 
-/// Callback de eventos de recarga; ver [`AnimatedRenderer::set_reload_callback`].
+/// Reload event callback; see [`AnimatedRenderer::set_reload_callback`].
 type ReloadCallback = Box<dyn FnMut(&ReloadEvent)>;
 
-/// Renderer de la Fase 3: shader WGSL animado a pantalla completa.
+/// Phase 3 renderer: fullscreen animated WGSL shader.
 ///
-/// - **Uniforms**: tiempo, parámetro 0, posición del mouse y resolución,
-///   actualizados en cada frame (`render_animated`).
-/// - **Hot-reload**: el archivo se relee si cambió su mtime (poll
-///   perezoso, una vez por frame). Un shader con errores NO mata el
-///   wallpaper: se conserva el pipeline anterior y se reporta por log
-///   (el próximo archivo válido se aplicará solo).
+/// - **Uniforms**: time, parameter 0, mouse position and resolution,
+///   updated every frame (`render_animated`).
+/// - **Hot-reload**: the file is re-read if its mtime changed (lazy poll,
+///   once per frame). A broken shader does NOT kill the wallpaper: the
+///   previous pipeline is kept and the failure is logged (the next valid
+///   file applies on its own).
 pub struct AnimatedRenderer {
     ctx: SurfaceCtx,
-    /// Ruta del shader y último mtime visto (para el hot-reload).
+    /// Shader path and last seen mtime (for hot-reload).
     shader_path: PathBuf,
     last_mtime: Option<std::time::SystemTime>,
-    /// Uniform buffer + bind group (layout fijo, compartido por todos los
-    /// pipelines que se creen en hot-reload).
+    /// Uniform buffer + bind group (fixed layout, shared by every
+    /// pipeline created in hot-reload).
     uniform_buf: wgpu::Buffer,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
-    /// Pipeline actual (reemplazado en cada hot-reload válido).
+    /// Current pipeline (replaced on each valid hot-reload).
     pipeline: wgpu::RenderPipeline,
-    /// Último tamaño configurado (para repintar tras el reload sin
-    /// esperar un configure nuevo).
+    /// Last configured size (to repaint after reload without waiting for
+    /// a new configure).
     last_size: (u32, u32),
-    /// Callback opcional de eventos de recarga (p. ej. para convertir un
-    /// rechazo de shader en notificación de escritorio). Se invoca desde
-    /// el hilo del bucle, nunca en la ruta del render.
+    /// Optional reload event callback (e.g. to turn a shader rejection
+    /// into a desktop notification). Invoked on the loop's thread, never
+    /// on the render path.
     on_reload: Option<ReloadCallback>,
-    /// Último error de compilación de hot-reload: dedup de autosaves que
-    /// reescriben el mismo contenido roto y aviso de recuperación con el
-    /// pipeline ya activo.
+    /// Last hot-reload compile error: dedup of autosaves rewriting the
+    /// same broken content, and recovery notice with the pipeline already
+    /// active.
     last_error: Option<String>,
-    /// Overrides de parámetros de ESTA salida: posición en `params[]` →
-    /// valor. Resueltos por NOMBRE contra el manifiesto en la CLI (una
-    /// salida puede tener `intensidad=0.2` y otra `0.9` con el mismo
-    /// shader y runtime compartido → animación sincronizada).
+    /// THIS output's parameter overrides: position in `params[]` → value.
+    /// Resolved by NAME against the manifest in the CLI (one output can
+    /// have `intensidad=0.2` and another `0.9` with the same shader and
+    /// shared runtime → synchronized animation).
     param_overrides: Vec<(usize, f32)>,
 }
 
-/// Evento de recarga de shader para el callback de
-/// [`AnimatedRenderer::set_reload_callback`].
+/// Shader reload event for [`AnimatedRenderer::set_reload_callback`]'s
+/// callback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReloadEvent {
-    /// El shader se aplicó (primera carga o hot-reload válido).
+    /// The shader was applied (first load or valid hot-reload).
     Applied,
-    /// El shader nuevo no compila; el pipeline anterior sigue en
-    /// pantalla. `error` es el mensaje de naga recortado.
+    /// The new shader does not compile; the previous pipeline stays on
+    /// screen. `error` is the clipped naga message.
     Rejected { error: String },
-    /// Tras uno o más rechazos, el shader volvió a compilar.
+    /// After one or more rejections, the shader compiled again.
     Recovered,
 }
 
 impl AnimatedRenderer {
-    /// Crea el renderer animado a partir de un archivo `.wgsl`.
+    /// Creates the animated renderer from a `.wgsl` file.
     ///
     /// # Safety
     ///
-    /// Igual que [`SurfaceCtx::new_wayland`]: los punteros deben ser
-    /// válidos y sobrevivir a la superficie; el caller garantiza el orden
-    /// de dropeo conexión > renderer.
+    /// Same as [`SurfaceCtx::new_wayland`]: the pointers must be valid
+    /// and outlive the surface; the caller guarantees the drop order
+    /// connection > renderer.
     ///
-    /// # Errores
+    /// # Errors
     ///
-    /// Devuelve [`RendererError::ShaderCompile`] si el shader inicial no
-    /// compila: sin pipeline no hay wallpaper. (Tras el arranque, los
-    /// errores de hot-reload se toleran conservando el pipeline viejo.)
+    /// Returns [`RendererError::ShaderCompile`] if the initial shader
+    /// does not compile: without a pipeline there is no wallpaper. (After
+    /// startup, hot-reload errors are tolerated keeping the old
+    /// pipeline.)
     pub unsafe fn new_wayland(
         display_ptr: NonNull<std::ffi::c_void>,
         surface_ptr: NonNull<std::ffi::c_void>,
@@ -826,13 +830,13 @@ impl AnimatedRenderer {
         unsafe { Self::on_shared(&shared, display_ptr, surface_ptr, shader_path) }
     }
 
-    /// Crea el renderer animado sobre GPU compartida (Fase 5: una GPU
-    /// sirve a todas las salidas; cada salida tiene su superficie, sus
-    /// uniforms y su pipeline — los pipelines son baratos, el device no).
+    /// Creates the animated renderer on a shared GPU (Phase 5: one GPU
+    /// serves all outputs; each output has its own surface, uniforms and
+    /// pipeline — pipelines are cheap, the device is not).
     ///
     /// # Safety
     ///
-    /// Igual que [`SurfaceCtx::new_wayland`].
+    /// Same as [`SurfaceCtx::new_wayland`].
     pub unsafe fn on_shared(
         shared: &GpuShared,
         display_ptr: NonNull<std::ffi::c_void>,
@@ -900,12 +904,12 @@ impl AnimatedRenderer {
         })
     }
 
-    /// Fija overrides de parámetros de ESTA salida (Fase 5).
+    /// Sets THIS output's parameter overrides (Phase 5).
     ///
-    /// `overrides` va en pares (posición_del_parámetro, valor); la
-    /// resolución nombre→posición la hace el CLI contra el manifiesto
-    /// (el renderer no sabe nada de manifiestos). Valores fuera de
-    /// 0..=1 se recortan; posiciones fuera de 0..4 se descartan.
+    /// `overrides` comes as (parameter_position, value) pairs; the
+    /// name→position resolution is done by the CLI against the manifest
+    /// (the renderer knows nothing about manifests). Values outside
+    /// 0..=1 are clamped; positions outside 0..4 are dropped.
     pub fn set_param_overrides(&mut self, overrides: Vec<(usize, f32)>) {
         self.param_overrides = overrides
             .into_iter()
@@ -914,19 +918,19 @@ impl AnimatedRenderer {
             .collect();
     }
 
-    /// Instala el callback de eventos de recarga (p. ej. para convertir
-    /// un rechazo de shader en notificación de escritorio).
+    /// Installs the reload event callback (e.g. to turn a shader
+    /// rejection into a desktop notification).
     pub fn set_reload_callback(&mut self, cb: ReloadCallback) {
         self.on_reload = Some(cb);
     }
 
-    /// Mtime del archivo, si se puede stat-ear.
+    /// File mtime, if it can be stat'ed.
     fn mtime(path: &Path) -> Option<std::time::SystemTime> {
         std::fs::metadata(path).and_then(|m| m.modified()).ok()
     }
 
-    /// Compila el shader y construye el pipeline con el layout estándar de
-    /// bruma (uniform block en group 0, binding 0).
+    /// Compiles the shader and builds the pipeline with bruma's standard
+    /// layout (uniform block on group 0, binding 0).
     fn build_pipeline(
         ctx: &SurfaceCtx,
         source: &str,
@@ -942,21 +946,21 @@ impl AnimatedRenderer {
         ))
     }
 
-    /// Emite un evento por el callback si hay callback instalado.
+    /// Emits an event through the callback if one is installed.
     fn emit(&mut self, event: &ReloadEvent) {
         if let Some(cb) = self.on_reload.as_mut() {
             cb(event);
         }
     }
 
-    /// Recarga el shader si el archivo cambió desde la última carga.
+    /// Reloads the shader if the file changed since the last load.
     ///
-    /// Estrategia: mtime perezoso (una stat por frame, ~1µs) + validación
-    /// síncrona con naga. Si el archivo nuevo no compila, el pipeline
-    /// anterior se conserva, se registra el error y se emite
-    /// [`ReloadEvent::Rejected`] (con dedup: mismos bytes = un solo
-    /// evento). Cuando el archivo vuelve a ser válido, se emite
-    /// [`ReloadEvent::Recovered`] si había errores previos.
+    /// Strategy: lazy mtime (one stat per frame, ~1µs) + synchronous
+    /// naga validation. If the new file does not compile, the previous
+    /// pipeline is kept, the error recorded and [`ReloadEvent::Rejected`]
+    /// emitted (with dedup: same bytes = a single event). When the file
+    /// becomes valid again, [`ReloadEvent::Recovered`] is emitted if
+    /// there were previous errors.
     fn maybe_reload(&mut self, width: u32, height: u32) {
         if Self::mtime(&self.shader_path) == self.last_mtime {
             return;
@@ -964,28 +968,28 @@ impl AnimatedRenderer {
         self.last_mtime = Self::mtime(&self.shader_path);
 
         let Ok(source) = std::fs::read_to_string(&self.shader_path) else {
-            log::warn!("hot-reload: no se pudo leer {}", self.shader_path.display());
+            log::warn!("hot-reload: could not read {}", self.shader_path.display());
             return;
         };
         match Self::build_pipeline(&self.ctx, &source, &self.bind_group_layout) {
             Ok(pipeline) => {
-                log::info!("hot-reload: shader aplicado");
+                log::info!("hot-reload: shader applied");
                 self.pipeline = pipeline;
                 if self.last_error.take().is_some() {
-                    // Recuperación tras rechazo(s): el pipeline nuevo ya
-                    // está en pantalla; avisamos al canal configurado.
+                    // Recovery after rejection(s): the new pipeline is
+                    // already on screen; we notify the configured channel.
                     self.emit(&ReloadEvent::Recovered);
                 } else {
                     self.emit(&ReloadEvent::Applied);
                 }
-                // Repinta inmediatamente con el shader nuevo.
+                // Repaint immediately with the new shader.
                 self.draw(width, height);
             }
             Err(e) => {
                 let msg = e.to_string();
-                log::warn!("hot-reload ignorado: {e}");
-                // Dedup: si el error es el mismo que el anterior, no
-                // re-emitir (los editores reescriben el archivo igual).
+                log::warn!("hot-reload ignored: {e}");
+                // Dedup: if the error matches the previous one, do not
+                // re-emit (editors rewrite the file identically).
                 if self.last_error.as_ref() != Some(&msg) {
                     self.last_error = Some(msg.clone());
                     self.emit(&ReloadEvent::Rejected { error: msg });
@@ -994,7 +998,7 @@ impl AnimatedRenderer {
         }
     }
 
-    /// Renderiza un frame al tamaño dado con el estado del runtime.
+    /// Renders one frame at the given size with the runtime's state.
     fn draw(&mut self, width: u32, height: u32) {
         self.ctx.configure(width, height);
         let Some(frame) = self.ctx.acquire_frame() else {
@@ -1047,8 +1051,8 @@ impl FrameRenderer for AnimatedRenderer {
             return;
         }
         self.last_size = (width, height);
-        // Sin runtime en el primer configure, renderiza con estado por
-        // defecto (tiempo 0); el bucle animado lo releva enseguida.
+        // No runtime at the first configure: render with default state
+        // (time 0); the animated loop takes over right away.
         let state = FrameState {
             width,
             height,
@@ -1061,10 +1065,10 @@ impl FrameRenderer for AnimatedRenderer {
         if state.width == 0 || state.height == 0 {
             return;
         }
-        // Hot-reload perezoso: solo si el mtime cambió.
+        // Lazy hot-reload: only if the mtime changed.
         self.maybe_reload(state.width, state.height);
 
-        // Aplica los overrides de ESTA salida sobre el estado global.
+        // Applies THIS output's overrides over the global state.
         let mut params = state.params;
         for (idx, value) in &self.param_overrides {
             if let Some(p) = params.get_mut(*idx) {
@@ -1072,11 +1076,11 @@ impl FrameRenderer for AnimatedRenderer {
             }
         }
 
-        // Sube los uniforms del frame (32 bytes).
+        // Uploads the frame's uniforms (32 bytes).
         let uniforms = Uniforms {
             time: state.time,
-            // Fase 3: `param0` con valor por defecto 0. La UI generada
-            // desde el manifiesto .wallpaper llega en la Fase 6.
+            // Phase 3: `param0` defaulting to 0. The UI generated from
+            // the .wallpaper manifest arrives in Phase 6.
             params0: params.first().copied().unwrap_or(0.0),
             mouse: [state.mouse_x, state.mouse_y],
             params,

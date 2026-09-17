@@ -1,30 +1,30 @@
 //! # bruma-platform
 //!
-//! Capa de plataforma: ventanas de fondo en Wayland vía `wlr-layer-shell`.
+//! Platform layer: background windows on Wayland via `wlr-layer-shell`.
 //!
-//! Estado: **Fase 5**. Implementación con `smithay-client-toolkit` 0.20
-//! (NO winit: no soporta layer-shell), igual que swww. El banco de pruebas
-//! de referencia es **niri** (+ DankMaterialShell), con el resto de
-//! compositors wlroots/KWin como best-effort.
+//! Status: **Phase 5**. Implemented with `smithay-client-toolkit` 0.20
+//! (NOT winit: it lacks layer-shell support), same as swww. The reference
+//! test bench is **niri** (+ DankMaterialShell), with the rest of the
+//! wlroots/KWin compositors as best-effort.
 //!
-//! Hay **una superficie de fondo por salida conectada** (Fase 5): una
-//! superficie sin output concreto solo cubre una pantalla en la mayoría
-//! de compositors. Las superficies nacen con el hotplug de salidas
-//! (`new_output`), mueren con él (`output_destroyed`/`closed`) y el
-//! renderizador de cada una lo decide una **factory** inyectada desde la
-//! CLI (la plataforma no conoce GPU: frontera D3/D6).
+//! There is **one background surface per connected output** (Phase 5): a
+//! surface without a concrete output only covers one screen on most
+//! compositors. Surfaces are born with output hotplug (`new_output`), die
+//! with it (`output_destroyed`/`closed`), and each one's renderer is
+//! decided by a **factory** injected from the CLI (the platform knows
+//! nothing about GPUs: D3/D6 boundary).
 //!
-//! El bucle de eventos tiene dos modos: `run` (solo eventos Wayland; la
-//! CPU queda idle con contenido estático) y `run_with_runtime` (conduce
-//! además la animación al ritmo que pida el `WallpaperRuntime`, durmiendo
-//! en `poll` sobre el socket — nunca spin) pintando TODAS las salidas.
+//! The event loop has two modes: `run` (Wayland events only; the CPU goes
+//! idle with static content) and `run_with_runtime` (also drives the
+//! animation at the pace the `WallpaperRuntime` asks for, sleeping in
+//! `poll` on the socket — never spinning) painting ALL outputs.
 //!
-//! NON-GOALS (ver DECISIONS.md): GNOME/Mutter en v1 (sin layer-shell);
-//! vídeo y audio en v1.
+//! NON-GOALS (see DECISIONS.md): GNOME/Mutter in v1 (no layer-shell);
+//! video and audio in v1.
 
-// deny y no forbid: el canal SIGHUP (hup.rs) necesita exactamente las
-// operaciones unsafe de señal/fd que ninguna API segura cubre; se
-// aíslan ahí con allow puntual y el resto del crate lo mantiene seco.
+// deny and not forbid: the SIGHUP channel (hup.rs) needs exactly the
+// unsafe signal/fd operations no safe API covers; they are isolated there
+// with a targeted allow and the rest of the crate keeps it that way.
 #![deny(unsafe_code)]
 
 mod hup;
@@ -64,22 +64,22 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
 };
 
-/// Una ventana de fondo detrás de todas las ventanas, **una por salida**.
+/// A background window behind every window, **one per output**.
 ///
-/// Tipo de alto nivel para el CLI: construye una superficie por cada
-/// salida conocida (y por las que se conecten después), y el bucle de
-/// eventos las mantiene vivas, redibujando en cada re-configuración del
-/// compositor (recarga de config, cambio de resolución, etc.).
+/// High-level type for the CLI: builds a surface for each known output
+/// (and for the ones connecting later), and the event loop keeps them
+/// alive, repainting on every compositor re-configuration (config reload,
+/// resolution change, etc.).
 pub struct BackgroundWindow {
-    /// Manija de la conexión (Arc interno): necesaria para `display_ptr`,
-    /// el fd del socket y roundtrips del CLI.
+    /// Connection handle (inner Arc): needed for `display_ptr`, the
+    /// socket fd and CLI roundtrips.
     conn: Connection,
     event_queue: EventQueue<BackgroundState>,
     state: BackgroundState,
 }
 
-/// Estado delegado de eventos Wayland. Es el dueño de todo lo necesario
-/// para dibujar, así los handlers pueden redibujar directamente.
+/// Delegated Wayland event state. It owns everything needed to draw, so
+/// handlers can repaint directly.
 struct BackgroundState {
     registry_state: RegistryState,
     output_state: OutputState,
@@ -89,63 +89,63 @@ struct BackgroundState {
     pool: SlotPool,
     color: Color,
     closed: bool,
-    /// Una entrada por salida conectada (Fase 5). Cada una con su propia
-    /// superficie layer-shell, tamaño y renderizador.
+    /// One entry per connected output (Phase 5). Each with its own
+    /// layer-shell surface, size and renderer.
     outputs: Vec<OutputEntry>,
-    /// Factory de renderers por superficie (Fase 5). La inyecta el CLI;
-    /// la plataforma solo la llama con los punteros crudos de la nueva
-    /// superficie — no sabe nada de GPU (D3/D6).
+    /// Renderer factory per surface (Phase 5). Injected by the CLI; the
+    /// platform only calls it with the new surface's raw pointers — it
+    /// knows nothing about GPUs (D3/D6).
     factory: Option<SurfaceRendererFactory>,
-    /// Rastreo de ventanas fullscreen por salida (pausa D12). El bind
-    /// del manager es opcional: sin protocolo, no hay pausa y todo
-    /// sigue como siempre.
+    /// Fullscreen window tracking per output (D12 pause). Binding the
+    /// manager is optional: without the protocol there is no pause and
+    /// everything goes on as usual.
     toplevel: toplevel::ToplevelTracker,
-    /// El manager ligado (si el protocolo existe). Hay que conservarlo
-    /// vivo: al dropearlo el compositor deja de anunciar toplevels.
+    /// The bound manager (if the protocol exists). It must be kept alive:
+    /// dropping it makes the compositor stop announcing toplevels.
     _toplevel_manager: Option<ZwlrForeignToplevelManagerV1>,
-    /// Último estado de pausa por salida (índice del Vec outputs): para
-    /// loggear solo transiciones, no cada frame.
+    /// Last pause state per output (index into the outputs Vec): so we
+    /// log transitions only, not every frame.
     last_pause: Vec<bool>,
-    /// Pausa global (D12): bloqueo de sesión y batería, best-effort vía
-    /// D-Bus de sistema. Sin bus, nunca pausa.
+    /// Global pause (D12): session lock and battery, best-effort over the
+    /// system D-Bus. Without a bus, never pauses.
     pause: pause::SessionPauseWatcher,
-    /// Último estado de la pausa global, para log de transiciones.
+    /// Last global pause state, for transition logs.
     last_global_pause: bool,
-    /// Canal SIGHUP→eventfd (recarga de config en caliente). `None` si
-    /// la instalación falló (raro: sin eventfd el kernel sería exótico);
-    /// entonces `bruma` no recarga por señal y el resto no cambia.
+    /// SIGHUP→eventfd channel (hot config reload). `None` if installation
+    /// failed (rare: no eventfd would be an exotic kernel); then `bruma`
+    /// does not reload on signal and nothing else changes.
     hup: Option<hup::HupChannel>,
-    /// Callback de recarga de config (lo instala el CLI): `true` = hubo
-    /// recarga y el bucle reconstituye renderers y repinta.
+    /// Config reload callback (installed by the CLI): `true` = there was
+    /// a reload and the loop rebuilds renderers and repaints.
     on_hup: Option<Box<dyn FnMut() -> bool + 'static>>,
 }
 
-/// Una superficie de fondo en una salida concreta.
+/// A background surface on one concrete output.
 ///
-/// `width`/`height` son el tamaño LÓGICO del configure; los píxeles de
-/// buffer (lo que se dibuja) salen de [`buffer_pixels`] con la escala.
+/// `width`/`height` are the LOGICAL size from the configure; buffer
+/// pixels (what gets drawn) come from [`buffer_pixels`] with the scale.
 struct OutputEntry {
-    /// Proxy de la salida (para casar `update_output`/`output_destroyed`
-    /// con su entrada, y para consultar el fullscreen del toplevel).
+    /// Output proxy (to match `update_output`/`output_destroyed` with its
+    /// entry, and to query toplevel fullscreen).
     output: Option<wl_output::WlOutput>,
-    /// Info declarativa (nombre, tamaño lógico) para logs y API.
+    /// Declarative info (name, logical size) for logs and API.
     info: OutputInfo,
     layer: LayerSurface,
     width: u32,
     height: u32,
-    /// Escala entera de buffer anunciada por el compositor (1 por
-    /// defecto; con escala fraccional niri redondea hacia arriba).
+    /// Integer buffer scale announced by the compositor (1 by default;
+    /// with fractional scale niri rounds up).
     scale: u32,
     configured: bool,
-    /// Renderer de ESTA salida (construido por la factory). `None` si la
-    /// factory falló o no hay factory: fallback de color sólido.
+    /// THIS output's renderer (built by the factory). `None` if the
+    /// factory failed or there is none: solid color fallback.
     renderer: Option<Box<dyn FrameRenderer>>,
-    /// Color de ESTA salida para el fallback SHM (de la factory). `None`
-    /// usa el color global de la ventana (comportamiento previo).
+    /// THIS output's color for the SHM fallback (from the factory).
+    /// `None` uses the window's global color (previous behavior).
     fallback_color: Option<Color>,
 }
 
-/// Píxeles de buffer para un tamaño lógico y una escala entera.
+/// Buffer pixels for a logical size and an integer scale.
 pub fn buffer_pixels(logical: (u32, u32), scale: u32) -> (u32, u32) {
     (
         logical.0.saturating_mul(scale),
@@ -153,29 +153,29 @@ pub fn buffer_pixels(logical: (u32, u32), scale: u32) -> (u32, u32) {
     )
 }
 
-/// Información mínima de una salida conectada.
+/// Minimal info about a connected output.
 #[derive(Debug, Clone)]
 pub struct OutputInfo {
     pub name: Option<String>,
     pub logical_size: Option<(i32, i32)>,
 }
 
-/// Punteros crudos + identidad de una superficie de fondo recién creada.
-/// Es lo único que la plataforma le pasa a la factory: con esto (y el
-/// nombre de la salida) el CLI puede construir su renderer.
+/// Raw pointers + identity of a freshly created background surface. It is
+/// all the platform hands the factory: with this (and the output name)
+/// the CLI can build its renderer.
 pub struct OutputSurfaceHandles {
     pub display_ptr: NonNull<std::ffi::c_void>,
     pub surface_ptr: NonNull<std::ffi::c_void>,
     pub output_name: Option<String>,
 }
 
-/// Resultado de la factory para UNA salida (Fase 5): renderer, color
-/// para el fallback, o ambos.
+/// Factory result for ONE output (Phase 5): renderer, fallback color, or
+/// both.
 ///
-/// - `Some(renderer)`: la salida pinta con GPU.
-/// - `None` + `Some(color)`: la salida pinta ese color por SHM
-///   (independiente del color global de `BackgroundWindow::new`).
-/// - `Err`: la salida cae al color global (comportamiento previo).
+/// - `Some(renderer)`: the output paints with the GPU.
+/// - `None` + `Some(color)`: the output paints that color via SHM
+///   (independent of `BackgroundWindow::new`'s global color).
+/// - `Err`: the output falls back to the global color (previous behavior).
 pub struct FactoryRenderer {
     pub renderer: Option<Box<dyn FrameRenderer>>,
     pub color: Option<Color>,
@@ -208,82 +208,82 @@ impl From<Box<dyn FrameRenderer>> for FactoryRenderer {
     }
 }
 
-/// Factory de renderers por superficie. Devuelve `Err` con el motivo si
-/// no se pudo construir; esa salida degrada a color sólido (con log) y
-/// las demás siguen — un escritorio con N pantallas no muere por una.
+/// Renderer factory per surface. Returns `Err` with the reason when it
+/// could not be built; that output degrades to solid color (with a log)
+/// and the others go on — a desktop with N screens does not die for one.
 pub type SurfaceRendererFactory =
     Box<dyn FnMut(&OutputSurfaceHandles) -> Result<FactoryRenderer, String>>;
 
-/// Reporte de una salida tras el arranque (para el log del CLI).
+/// Per-output report after startup (for the CLI's log).
 #[derive(Debug, Clone)]
 pub struct OutputReport {
     pub name: Option<String>,
-    /// Tamaño de buffer dibujado (lógico × escala), en píxeles.
+    /// Drawn buffer size (logical × scale), in pixels.
     pub width: u32,
     pub height: u32,
-    /// Escala entera de la salida (DPI).
+    /// Output's integer scale (DPI).
     pub scale: u32,
-    /// ¿Tiene renderer de la factory (true) o fallback de color (false)?
+    /// Does it have a factory renderer (true) or a color fallback (false)?
     pub gpu: bool,
 }
 
-/// Errores de la capa de plataforma.
+/// Platform layer errors.
 #[derive(Debug, thiserror::Error)]
 pub enum PlatformError {
-    /// No se pudo conectar al compositor Wayland.
-    #[error("no se pudo conectar al compositor Wayland: {0}")]
+    /// Could not connect to the Wayland compositor.
+    #[error("could not connect to the Wayland compositor: {0}")]
     Connect(String),
-    /// El compositor no soporta un protocolo necesario.
+    /// The compositor does not support a required protocol.
     #[error(
-        "el compositor no soporta {0} (¿Wayland con wlr-layer-shell? niri, sway, Hyprland y KWin lo soportan; GNOME no)"
+        "the compositor does not support {0} (Wayland with wlr-layer-shell? niri, sway, Hyprland and KWin support it; GNOME does not)"
     )]
     MissingProtocol(&'static str),
-    /// Error de memoria compartida (wl_shm).
-    #[error("error de wl_shm: {0}")]
+    /// Shared memory error (wl_shm).
+    #[error("wl_shm error: {0}")]
     Shm(String),
-    /// El compositor cerró la superficie.
-    #[error("el compositor cerró la superficie de fondo")]
+    /// The compositor closed the surface.
+    #[error("the compositor closed the background surface")]
     SurfaceClosed,
-    /// El compositor nunca configuró la superficie.
-    #[error("el compositor nunca configuró la superficie de fondo")]
+    /// The compositor never configured the surface.
+    #[error("the compositor never configured the background surface")]
     NotConfigured,
-    /// No hay ninguna salida conectada.
-    #[error("no hay ninguna salida conectada")]
+    /// There is no connected output.
+    #[error("no connected outputs")]
     NoOutputs,
-    /// Error de despacho de eventos.
-    #[error("error en el bucle de eventos: {0}")]
+    /// Event dispatch error.
+    #[error("event loop error: {0}")]
     Dispatch(#[from] wayland_client::DispatchError),
-    /// Error de E/S esperando eventos (flush/poll/lectura del socket).
-    #[error("error esperando eventos: {0}")]
+    /// I/O error waiting for events (socket flush/poll/read).
+    #[error("error waiting for events: {0}")]
     Poll(String),
 }
 
 impl BackgroundWindow {
-    /// Conecta al compositor (vía entorno) y prepara el fondo. Las
-    /// superficies por salida se crean solas en el primer roundtrip
-    /// (`new_output`), ya con la factory instalada si se instala ANTES
-    /// del primer `present_once`.
+    /// Connects to the compositor (via the environment) and prepares the
+    /// background. Per-output surfaces create themselves on the first
+    /// roundtrip (`new_output`), already with the factory installed if it
+    /// was installed BEFORE the first `present_once`.
     pub fn new(color: Color) -> Result<Self, PlatformError> {
         let conn =
             Connection::connect_to_env().map_err(|e| PlatformError::Connect(e.to_string()))?;
         Self::for_connection(conn, color)
     }
 
-    /// Igual que [`Self::new`] pero sobre una conexión ya establecida.
+    /// Same as [`Self::new`] but over an already established connection.
     pub fn for_connection(conn: Connection, color: Color) -> Result<Self, PlatformError> {
         let (globals, event_queue) =
             registry_queue_init(&conn).map_err(|e| PlatformError::Connect(e.to_string()))?;
         let qh = event_queue.handle();
 
-        // Los estados de protocolo viven en el estado: `new_output` los
-        // necesita para crear superficies en caliente (hotplug).
+        // Protocol states live in the state: `new_output` needs them to
+        // create surfaces on the fly (hotplug).
         let compositor = CompositorState::bind(&globals, &qh)
             .map_err(|_| PlatformError::MissingProtocol("wl_compositor"))?;
         let layer_shell = LayerShell::bind(&globals, &qh)
             .map_err(|_| PlatformError::MissingProtocol("zwlr_layer_shell_v1"))?;
         let shm = Shm::bind(&globals, &qh).map_err(|_| PlatformError::MissingProtocol("wl_shm"))?;
 
-        // Pausa en fullscreen (D12): opcional por protocolo.
+        // Fullscreen pause (D12): optional per protocol.
         let toplevel_mgr = globals
             .bind::<
                 wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1,
@@ -292,7 +292,7 @@ impl BackgroundWindow {
             >(&qh, 1..=3, ())
             .ok();
         if toplevel_mgr.is_none() {
-            log::info!("sin wlr-foreign-toplevel: la pausa en fullscreen no está disponible");
+            log::info!("no wlr-foreign-toplevel: the fullscreen pause is unavailable");
         }
 
         let pool =
@@ -323,46 +323,46 @@ impl BackgroundWindow {
         })
     }
 
-    /// Instala la factory de renderers por superficie (Fase 5). Debe
-    /// llamarse ANTES del primer `present_once` para que las superficies
-    /// del arranque nazcan ya con su renderer.
+    /// Installs the per-surface renderer factory (Phase 5). Must be called
+    /// BEFORE the first `present_once` so startup surfaces are born with
+    /// their renderer.
     pub fn set_renderer_factory(&mut self, factory: SurfaceRendererFactory) {
         self.state.factory = Some(factory);
     }
 
-    /// Registra el handler de recarga de config (SIGHUP): se invoca en
-    /// el hilo del bucle; devolver `true` reconstituye los renderers vía
-    /// factory y repinta. Sin handler, SIGHUP solo despierta el bucle.
+    /// Registers the config reload handler (SIGHUP): invoked on the loop's
+    /// thread; returning `true` rebuilds the renderers via the factory and
+    /// repaints. Without a handler, SIGHUP only wakes the loop.
     pub fn on_config_reload(&mut self, f: Box<dyn FnMut() -> bool + 'static>) {
         self.state.on_hup = Some(f);
     }
 
-    /// Instala UN renderer compartido por todas las salidas... no se puede:
-    /// cada salida necesita su propia superficie GPU. Este método es el
-    /// reemplazo del antiguo `set_frame_renderer`: envuelve al renderer
-    /// dado en una factory que clona el modelo de construcción.
+    /// Installs ONE renderer shared by all outputs... it can't be done:
+    /// each output needs its own GPU surface. This method replaces the old
+    /// `set_frame_renderer`: it wraps the given renderer in a factory that
+    /// clones the build model.
     ///
-    /// NOTA: `FrameRenderer` no es `Clone`; la factory solo tiene sentido
-    /// construyendo un renderer NUEVO por superficie (por eso existe
-    /// [`Self::set_renderer_factory`]).
+    /// NOTE: `FrameRenderer` is not `Clone`; the factory only makes sense
+    /// building a NEW renderer per surface (that's why
+    /// [`Self::set_renderer_factory`] exists).
     pub fn set_frame_renderer(&mut self, renderer: Box<dyn FrameRenderer>) {
-        // Degradación honesta: el primer output recibe el renderer tal
-        // cual (backward compat con las fases 1-4); los demás quedan en
-        // color sólido con un warning claro.
+        // Honest degradation: the first output gets the renderer as is
+        // (backward compat with phases 1-4); the rest stay on solid color
+        // with a clear warning.
         let mut taken = Some(renderer);
         self.state.factory = Some(Box::new(move |_handles| {
             if let Some(r) = taken.take() {
                 Ok(FactoryRenderer::renderer(r))
             } else {
-                Err("set_frame_renderer solo provee un renderer: \
-                     usa set_renderer_factory para multi-salida"
+                Err("set_frame_renderer provides a single renderer: \
+                     use set_renderer_factory for multi-output"
                     .to_owned())
             }
         }));
     }
 
-    /// ¿Algún renderer instalado produce contenido animado? Lo consulta
-    /// el CLI para elegir entre `run` y `run_with_runtime`.
+    /// Does any installed renderer produce animated content? The CLI
+    /// queries it to choose between `run` and `run_with_runtime`.
     pub fn wants_animation(&self) -> bool {
         self.state
             .outputs
@@ -370,36 +370,35 @@ impl BackgroundWindow {
             .any(|o| o.renderer.as_ref().is_some_and(|r| r.wants_animation()))
     }
 
-    /// Puntero crudo al `wl_display` de la conexión.
+    /// Raw pointer to the connection's `wl_display`.
     pub fn display_ptr(&self) -> NonNull<std::ffi::c_void> {
-        // En libwayland `wl_display` ES un `wl_proxy` (el mismo puntero);
-        // el cast a c_void es lo que esperan wgpu/Vulkan.
+        // In libwayland `wl_display` IS a `wl_proxy` (the same pointer);
+        // the cast to c_void is what wgpu/Vulkan expect.
         let ptr = self.conn.backend().display_id().as_ptr();
-        NonNull::new(ptr).expect("wl_display vivo").cast()
+        NonNull::new(ptr).expect("live wl_display").cast()
     }
 
-    /// Cambia el color de fondo; surte efecto en el próximo redibujo.
+    /// Changes the background color; takes effect on the next repaint.
     pub fn set_color(&mut self, color: Color) {
         self.state.color = color;
     }
 
-    /// Pantallas detectadas hasta ahora.
+    /// Screens detected so far.
     pub fn outputs(&self) -> Vec<OutputInfo> {
         self.state.outputs.iter().map(|o| o.info.clone()).collect()
     }
 
-    /// Procesa eventos hasta que TODAS las salidas conocidas estén
-    /// configuradas. Devuelve un reporte por salida (tamaño y si pinta
-    /// con GPU o con el fallback de color).
+    /// Processes events until ALL known outputs are configured. Returns a
+    /// report per output (size and whether it paints with the GPU or the
+    /// color fallback).
     pub fn present_once(&mut self) -> Result<Vec<OutputReport>, PlatformError> {
-        // Primer roundtrip: globals + creación de superficies + configures.
+        // First roundtrip: globals + surface creation + configures.
         self.event_queue.roundtrip(&mut self.state)?;
         if self.state.closed {
             return Err(PlatformError::SurfaceClosed);
         }
-        // Los outputs pueden seguir llegando (hotplug temprano); los
-        // recién llegados necesitan su configure. Un roundtrip extra
-        // drena los pendientes.
+        // Outputs may keep arriving (early hotplug); newcomers need their
+        // configure. An extra roundtrip drains the pending ones.
         self.event_queue.roundtrip(&mut self.state)?;
         if self.state.outputs.is_empty() {
             return Err(PlatformError::NoOutputs);
@@ -425,9 +424,9 @@ impl BackgroundWindow {
         Ok(reports)
     }
 
-    /// Reconstituye el renderer/color de cada salida vía factory y las
-    /// repinta (recarga de config en caliente): la factory decide por
-    /// salida; si falla, esa salida cae a su color de fallback.
+    /// Rebuilds each output's renderer/color via the factory and repaints
+    /// them (hot config reload): the factory decides per output; if it
+    /// fails, that output falls back to its fallback color.
     pub fn reload_renderers(&mut self) {
         let conn = self.conn.clone();
         for idx in 0..self.state.outputs.len() {
@@ -438,81 +437,82 @@ impl BackgroundWindow {
             let (renderer, fallback_color) = self.state.build_renderer(&conn, &layer, &output);
             self.state.outputs[idx].renderer = renderer;
             self.state.outputs[idx].fallback_color = fallback_color;
-            // Repinta YA (config estática: sin frame callback el píxel
-            // no cambiaría hasta el próximo configure/evento).
+            // Repaint NOW (static config: with no frame callback the pixel
+            // would not change until the next configure/event).
             self.state.draw_entry(idx);
         }
     }
 
-    /// Ejecuta el bucle de eventos hasta que el compositor cierre el
-    /// fondo. Ctrl-C termina el proceso (comportamiento por defecto).
+    /// Runs the event loop until the compositor closes the background.
+    /// Ctrl-C ends the process (default behavior).
     ///
-    /// Modo estático: solo atiende eventos Wayland (configure, frame
-    /// callbacks...); entre eventos, `blocking_dispatch` duerme sin girar
-    /// la CPU.
+    /// Static mode: only attends Wayland events (configure, frame
+    /// callbacks...); between events, `blocking_dispatch`-style waiting
+    /// sleeps without spinning the CPU.
     pub fn run(&mut self) -> Result<(), PlatformError> {
-        // Bucle estático: espera indefinida (el canal SIGHUP despierta
-        // el poll para la recarga de config).
+        // Static loop: indefinite wait (the SIGHUP channel wakes the poll
+        // for config reload).
         while !self.state.closed {
             self.wait_and_dispatch(None)?;
         }
         Ok(())
     }
 
-    /// Igual que [`Self::run`], pero conduciendo además la animación con
-    /// el runtime dado (Fase 3) en TODAS las salidas (Fase 5).
+    /// Like [`Self::run`], but also driving the animation with the given
+    /// runtime (Phase 3) on ALL outputs (Phase 5).
     ///
-    /// El ritmo lo dicta el runtime: en cada iteración se le pregunta si
-    /// toca dibujar ([`WallpaperRuntime::begin_frame`]); si no, el bucle
-    /// duerme en `poll` hasta el deadline del runtime o hasta que llegue
-    /// un evento del compositor — lo que ocurra primero. Sin spin.
+    /// The runtime dictates the pace: on each iteration it is asked
+    /// whether it is time to draw ([`WallpaperRuntime::begin_frame`]); if
+    /// not, the loop sleeps in `poll` until the runtime's deadline or
+    /// until a compositor event arrives — whichever comes first. No
+    /// spinning.
     pub fn run_with_runtime(
         &mut self,
         runtime: &mut dyn WallpaperRuntime,
     ) -> Result<(), PlatformError> {
         while !self.state.closed {
-            // Pausa global (D12): drena señales de bloqueo/batería y,
-            // si hay alguna, no se repinta NINGUNA salida (el fondo está
-            // tapado por la pantalla de bloqueo, o ahorramos batería).
-            // Igual que el fullscreen: el runtime NO se pausa — el
-            // tiempo global sigue y al despausar retoma sin salto.
+            // Global pause (D12): drain lock/battery signals and, if any,
+            // NO output is repainted (the wallpaper is covered by the
+            // lock screen, or we save battery). Like fullscreen: the
+            // runtime is NOT paused — global time goes on and on unpause
+            // the animation resumes without a jump.
             self.state.pause.poll();
             let global_pause = self.state.pause.paused();
             if global_pause != self.state.last_global_pause {
                 log::info!(
-                    "pausa global {}: el motor {} repintar (bloqueo/batería)",
+                    "global pause {}: engine {} repainting (lock/battery)",
                     if global_pause { "ON" } else { "OFF" },
-                    if global_pause { "deja de" } else { "vuelve a" }
+                    if global_pause { "stops" } else { "resumes" }
                 );
                 self.state.last_global_pause = global_pause;
             }
 
-            // Deadline del despertar: SIEMPRE acotado. Tras dibujar, el
-            // segundo begin_frame devuelve Skip con el deadline del
-            // próximo tick (no toca el tiempo: now-last < interval).
-            // Sin esto, el poll tras el Draw sería indefinido y la
-            // animación solo avanzaría con eventos del compositor — bug
-            // latente desde la Fase 3, enmascarado por el tráfico
-            // constante de un escritorio en uso.
+            // Wake deadline: ALWAYS bounded. After drawing, the second
+            // begin_frame returns Skip with the next tick's deadline (it
+            // does not touch time: now-last < interval). Without this,
+            // the poll after the Draw would be indefinite and the
+            // animation would only advance on compositor events — latent
+            // bug since Phase 3, masked by the constant traffic of a
+            // desktop in use.
             let deadline = match runtime.begin_frame(Instant::now()) {
                 FrameDecision::Draw => {
-                    // La resolución real la impone cada superficie (su
-                    // último configure); el runtime aporta tiempo, mouse
-                    // y parámetros. Un frame de runtime pinta todas las
-                    // salidas con el MISMO instante: la animación va
-                    // sincronizada entre monitores.
+                    // The real resolution is imposed by each surface (its
+                    // last configure); the runtime contributes time, mouse
+                    // and parameters. One runtime frame paints all outputs
+                    // with the SAME instant: the animation stays
+                    // synchronized across monitors.
                     //
-                    // Pausa por salida (D12): si hay una ventana
-                    // fullscreen sobre la salida, su fondo se congela
-                    // (no se repinta) — el último buffer sigue en
-                    // pantalla a cargo del compositor. Las demás salidas
-                    // siguen animando. El runtime NO se pausa: el tiempo
-                    // global sigue corriendo y al salir del fullscreen
-                    // la animación retoma por donde iba (sin salto).
+                    // Per-output pause (D12): if a fullscreen window sits
+                    // on the output, its wallpaper freezes (not repainted)
+                    // — the last buffer stays on screen, in the
+                    // compositor's hands. Other outputs keep animating.
+                    // The runtime is NOT paused: global time keeps running
+                    // and on leaving fullscreen the animation resumes
+                    // where it was (no jump).
                     let mut st = runtime.state();
-                    // Pausa global activa: no se repinta NINGUNA salida
-                    // (el último buffer queda en pantalla a cargo del
-                    // compositor, como en el fullscreen por salida).
+                    // Global pause active: NO output is repainted (the
+                    // last buffer stays on screen, in the compositor's
+                    // hands, like per-output fullscreen).
                     for idx in 0..self.state.outputs.len() {
                         if global_pause {
                             break;
@@ -533,7 +533,8 @@ impl BackgroundWindow {
                             .output
                             .as_ref()
                             .is_some_and(|o| self.state.toplevel.is_fullscreen_on(o));
-                        // Diagnóstico: log solo en transición (no por frame).
+                        // Diagnostics: log only on transition (not per
+                        // frame).
                         if self
                             .state
                             .last_pause
@@ -541,7 +542,7 @@ impl BackgroundWindow {
                             .is_none_or(|prev| *prev != fullscreened)
                         {
                             log::info!(
-                                "salida {:?}: pausa fullscreen = {}",
+                                "output {:?}: fullscreen pause = {}",
                                 self.state.outputs[idx].info.name,
                                 fullscreened
                             );
@@ -562,8 +563,8 @@ impl BackgroundWindow {
                     }
                     match runtime.begin_frame(Instant::now()) {
                         FrameDecision::Skip { deadline } => Some(deadline),
-                        // Sin límite de fps (runtime exótico): cede el
-                        // hilo con timeout 0 en vez de girar en seco.
+                        // No fps cap (exotic runtime): yield the thread
+                        // with timeout 0 instead of spinning dry.
                         FrameDecision::Draw => Some(Instant::now()),
                     }
                 }
@@ -574,17 +575,17 @@ impl BackgroundWindow {
         Ok(())
     }
 
-    /// Despacha lo pendiente y, si no había nada, espera en el socket de
-    /// Wayland hasta `timeout` o hasta que lleguen eventos (lo que ocurra
-    /// antes). Es la réplica del bucle interno de
-    /// `EventQueue::blocking_dispatch`, con timeout añadido:
+    /// Dispatches what is pending and, if there was nothing, waits on the
+    /// Wayland socket until `timeout` or until events arrive (whichever
+    /// comes first). It mirrors `EventQueue::blocking_dispatch`'s inner
+    /// loop, with a timeout added:
     ///
-    /// 1. `dispatch_pending`: despacha lo ya leído.
-    /// 2. `flush`: envía las peticiones pendientes (p. ej. frame callbacks).
-    /// 3. `prepare_read` + `poll` + `read`: arma la lectura y duerme.
-    ///    El `prepare_read` es obligatorio para no perder eventos que
-    ///    lleguen entre el `dispatch_pending` y el `poll`.
-    /// 4. `dispatch_pending` final: reparte lo recién leído.
+    /// 1. `dispatch_pending`: dispatch what was already read.
+    /// 2. `flush`: send pending requests (e.g. frame callbacks).
+    /// 3. `prepare_read` + `poll` + `read`: arm the read and sleep.
+    ///    `prepare_read` is mandatory to not lose events arriving between
+    ///    `dispatch_pending` and `poll`.
+    /// 4. Final `dispatch_pending`: hand out what was just read.
     fn wait_and_dispatch(&mut self, timeout: Option<Instant>) -> Result<(), PlatformError> {
         use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
@@ -603,14 +604,14 @@ impl BackgroundWindow {
             }
         });
 
-        // SIGHUP pendiente durante este poll (se drena abajo, dentro del
-        // bloque del guard).
+        // SIGHUP pending during this poll (drained below, inside the
+        // guard block).
         let mut hup = false;
         if let Some(guard) = self.event_queue.prepare_read() {
-            // El handle Backend es un Arc barato; el BorrowedFd presta de
-            // él, así que el handle vive en este bloque. El eventfd del
-            // canal SIGHUP se añade si existe: su poll_fd es válido
-            // mientras el canal viva (campo del propio estado).
+            // The Backend handle is a cheap Arc; BorrowedFd borrows from
+            // it, so the handle lives in this block. The SIGHUP channel's
+            // eventfd is added if it exists: its poll_fd is valid while
+            // the channel lives (a field of the state itself).
             let backend = self.conn.backend();
             let fd = backend.poll_fd();
             let mut fds: Vec<PollFd<'_>> = vec![PollFd::new(&fd, PollFlags::IN)];
@@ -618,34 +619,34 @@ impl BackgroundWindow {
             if let Some(h) = &hup_borrow {
                 fds.push(PollFd::new(h, PollFlags::IN));
             }
-            let mut wayland_listo = false;
+            let mut wayland_ready = false;
             match poll(&mut fds, wait.as_ref()) {
-                // ready == 0: venció el timeout (toque de animación).
-                // ready > 0: hay datos en alguno de los dos fds.
+                // ready == 0: the timeout expired (animation tick).
+                // ready > 0: data on one of the two fds.
                 Ok(_) => {
-                    wayland_listo = fds[0].revents().intersects(PollFlags::IN | PollFlags::HUP);
+                    wayland_ready = fds[0].revents().intersects(PollFlags::IN | PollFlags::HUP);
                 }
-                // EINTR (señales como SIGINT): no es un error para el bucle.
+                // EINTR (signals like SIGINT): not an error for the loop.
                 Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(PlatformError::Poll(e.to_string())),
             }
             hup = self.state.hup.as_ref().is_some_and(|c| c.drain());
-            // El slot de lectura SOLO se consume con datos: `read` con el
-            // socket vacío BLOQUEA hasta el primer evento (y tras un
-            // timeout de animación es el caso común). Con SIGHUP pendiente
-            // se suelta sin leer: la recarga reconstruye renderers wgpu y
-            // el driver hace roundtrips de Wayland que necesitan el slot
-            // libre (si no, se espera a sí mismo: deadlock, visto en core
-            // dump dentro de wl_display_read_events).
-            if wayland_listo && !hup {
+            // The read slot is ONLY consumed with data: `read` with an
+            // empty socket BLOCKS until the first event (and after an
+            // animation timeout that is the common case). With a pending
+            // SIGHUP it is dropped without reading: the reload rebuilds
+            // wgpu renderers and the driver does Wayland roundtrips that
+            // need the slot free (otherwise it waits on itself: deadlock,
+            // seen in a core dump inside wl_display_read_events).
+            if wayland_ready && !hup {
                 guard
                     .read()
                     .map_err(|e| PlatformError::Poll(e.to_string()))?;
             }
         }
-        // Recarga FUERA del guard de lectura (ver arriba: roundtrips del
-        // driver durante la construcción de renderers). Los eventos que
-        // quedaron en el socket se leen en la próxima vuelta del bucle.
+        // Reload OUTSIDE the read guard (see above: driver roundtrips
+        // while building renderers). Events left on the socket are read
+        // on the next loop turn.
         if hup && self.state.on_hup.as_mut().is_some_and(|f| f()) {
             self.reload_renderers();
         }
@@ -656,10 +657,10 @@ impl BackgroundWindow {
 }
 
 impl BackgroundState {
-    /// Ciclo completo de alta de una salida: superficie layer-shell,
-    /// renderer vía factory (con los punteros reales ya creados) y
-    /// registro. El renderer se construye ANTES del primer configure
-    /// para que pinte él el primer frame (patrón de las fases 2-4).
+    /// Full registration cycle for an output: layer-shell surface,
+    /// renderer via factory (with the real pointers already created) and
+    /// registration. The renderer is built BEFORE the first configure so
+    /// it paints the first frame itself (phases 2-4 pattern).
     fn create_surface_for_output(
         &mut self,
         conn: &Connection,
@@ -678,18 +679,18 @@ impl BackgroundState {
             surface,
             Layer::Background,
             Some("bruma"),
-            Some(output), // << LA salida concreta (clave de la Fase 5)
+            Some(output), // << THE concrete output (the key to Phase 5)
         );
-        // Anclada a los cuatro bordes => ocupa la pantalla completa; el
-        // tamaño lo impone el compositor en el configure (se pide 0,0).
+        // Anchored to all four edges => covers the whole screen; the
+        // compositor imposes the size on configure (0,0 is requested).
         layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
         layer.set_exclusive_zone(-1);
         layer.set_size(0, 0);
-        // Un wallpaper no debe robar el teclado ni el puntero.
+        // A wallpaper must not steal the keyboard or the pointer.
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-        // Escala inicial (la confirmará preferred_buffer_scale vía
-        // `scale_factor_changed`): el buffer se dibuja en píxeles físicos,
-        // nítido en HiDPI. Debe fijarse ANTES del primer commit.
+        // Initial scale (to be confirmed by preferred_buffer_scale via
+        // `scale_factor_changed`): the buffer is drawn in physical
+        // pixels, sharp on HiDPI. Must be set BEFORE the first commit.
         let scale = self
             .output_state
             .info(output)
@@ -698,13 +699,13 @@ impl BackgroundState {
         layer.wl_surface().set_buffer_scale(scale as i32);
         layer.commit();
 
-        // Renderer por salida, con los punteros crudos de LA superficie
-        // recién creada. La factory puede dar renderer, color de
-        // fallback propio, ambos, o fallar (color global): un escritorio
-        // de N pantallas no muere por una.
+        // Per-output renderer, with the raw pointers of THE freshly
+        // created surface. The factory may yield a renderer, its own
+        // fallback color, both, or fail (global color): a desktop of N
+        // screens does not die for one.
         let (renderer, fallback_color) = self.build_renderer(conn, &layer, output);
 
-        log::info!("superficie de fondo creada en salida {:?}", entry_info.name);
+        log::info!("background surface created on output {:?}", entry_info.name);
         self.outputs.push(OutputEntry {
             output: Some(output.clone()),
             info: entry_info,
@@ -718,7 +719,7 @@ impl BackgroundState {
         });
     }
 
-    /// Construye el renderer de una salida vía factory (si hay).
+    /// Builds an output's renderer via the factory (if any).
     fn build_renderer(
         &mut self,
         conn: &Connection,
@@ -730,11 +731,11 @@ impl BackgroundState {
         };
         let display_ptr = {
             let ptr = conn.backend().display_id().as_ptr();
-            NonNull::new(ptr).expect("wl_display vivo").cast()
+            NonNull::new(ptr).expect("live wl_display").cast()
         };
         let surface_ptr = {
             let ptr = layer.wl_surface().id().as_ptr();
-            NonNull::new(ptr).expect("wl_surface vivo").cast()
+            NonNull::new(ptr).expect("live wl_surface").cast()
         };
         let info = self.output_state.info(output);
         let handles = OutputSurfaceHandles {
@@ -746,7 +747,7 @@ impl BackgroundState {
             Ok(fr) => (fr.renderer, fr.color),
             Err(e) => {
                 log::warn!(
-                    "salida {:?} sin renderer GPU (fallback a color): {e}",
+                    "output {:?} without GPU renderer (color fallback): {e}",
                     handles.output_name
                 );
                 (None, None)
@@ -754,17 +755,16 @@ impl BackgroundState {
         }
     }
 
-    /// Aplica la escala entera de buffer de una entrada: llama a
-    /// `set_buffer_scale` y la registra en la entrada (el tamaño de
-    /// buffer lo calcula `draw_entry` con [`buffer_pixels`]). Solo actúa
-    /// en transición real.
+    /// Applies an entry's integer buffer scale: calls `set_buffer_scale`
+    /// and records it on the entry (`draw_entry` computes the buffer size
+    /// with [`buffer_pixels`]). Only acts on a real transition.
     fn apply_scale(&mut self, idx: usize, scale: u32) {
         let scale = scale.max(1);
         if self.outputs[idx].scale == scale {
             return;
         }
         log::info!(
-            "salida {:?}: escala de buffer {}→{}",
+            "output {:?}: buffer scale {}→{}",
             self.outputs[idx].info.name,
             self.outputs[idx].scale,
             scale
@@ -776,15 +776,15 @@ impl BackgroundState {
             .set_buffer_scale(scale as i32);
     }
 
-    /// Busca la entrada dueña de una superficie layer-shell.
+    /// Finds the entry owning a layer-shell surface.
     fn entry_by_surface(&mut self, surface: &wl_surface::WlSurface) -> Option<usize> {
         self.outputs
             .iter()
             .position(|o| o.layer.wl_surface().id() == surface.id())
     }
 
-    /// Fallback de la Fase 1: rellena un buffer ARGB8888 del color dado,
-    /// lo daña y lo committea, para la entrada indicada.
+    /// Phase 1 fallback: fills an ARGB8888 buffer with the given color,
+    /// damages it and commits it, for the given entry.
     fn draw_solid_entry(
         entry: &mut OutputEntry,
         pool: &mut SlotPool,
@@ -802,9 +802,9 @@ impl BackgroundState {
             stride,
             wl_shm::Format::Argb8888,
         ) else {
-            log::error!("no se pudo crear buffer {width}x{height}");
+            log::error!("could not create buffer {width}x{height}");
             return;
-        }; // ARGB8888 en memoria nativa little-endian => bytes B,G,R,A.
+        }; // ARGB8888 in native little-endian memory => bytes B,G,R,A.
         let px = [color.b, color.g, color.r, color.a];
         canvas.as_chunks_mut::<4>().0.iter_mut().for_each(|chunk| {
             *chunk = px;
@@ -816,8 +816,8 @@ impl BackgroundState {
         entry.layer.commit();
     }
 
-    /// Dibuja una entrada (renderer si hay; color si no), en píxeles de
-    /// buffer (tamaño lógico × escala).
+    /// Draws an entry (renderer if any; color otherwise), in buffer
+    /// pixels (logical size × scale).
     fn draw_entry(&mut self, idx: usize) {
         let (w, h) = buffer_pixels(
             (self.outputs[idx].width, self.outputs[idx].height),
@@ -834,7 +834,7 @@ impl BackgroundState {
         }
     }
 
-    /// Fallback de color para la entrada idx (usar cuando NO hay renderer).
+    /// Color fallback for entry idx (use when there is NO renderer).
     fn draw_entry_solid(&mut self, idx: usize) {
         let (w, h) = (self.outputs[idx].width, self.outputs[idx].height);
         let color = self.outputs[idx].fallback_color.unwrap_or(self.color);
@@ -851,9 +851,9 @@ impl CompositorHandler for BackgroundState {
         surface: &wl_surface::WlSurface,
         new_factor: i32,
     ) {
-        // DPI por salida: el buffer pasa a dibujarse en píxeles físicos
-        // (lógico × escala). Se repinta ya: un configure nuevo no está
-        // garantizado (el tamaño lógico no cambió).
+        // Per-output DPI: the buffer switches to physical pixels
+        // (logical × scale). Repaint right away: a new configure is not
+        // guaranteed (the logical size did not change).
         if let Some(idx) = self.entry_by_surface(surface) {
             self.apply_scale(idx, new_factor.max(1) as u32);
             self.draw_entry(idx);
@@ -867,7 +867,7 @@ impl CompositorHandler for BackgroundState {
         _surface: &wl_surface::WlSurface,
         _new_transform: wl_output::Transform,
     ) {
-        // Fase 5 (futuro): rotación de salida.
+        // Phase 5 (future): output rotation.
     }
 
     fn frame(
@@ -877,8 +877,8 @@ impl CompositorHandler for BackgroundState {
         _surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
-        // El color estático no anima; el renderer wgpu presenta por su
-        // cuenta (no pide frame callbacks del compositor).
+        // Static color does not animate; the wgpu renderer presents on
+        // its own (it does not request compositor frame callbacks).
     }
 
     fn surface_enter(
@@ -888,8 +888,8 @@ impl CompositorHandler for BackgroundState {
         _surface: &wl_surface::WlSurface,
         _output: &wl_output::WlOutput,
     ) {
-        // Con una superficie por salida, `enter` es trivialmente la suya.
-        // El log de salidas vive en `create_surface_for_output`.
+        // With one surface per output, `enter` is trivially its own.
+        // Output logging lives in `create_surface_for_output`.
     }
 
     fn surface_leave(
@@ -913,7 +913,7 @@ impl OutputHandler for BackgroundState {
         qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        // HOTPLUG (Fase 5): nueva salida => nueva superficie de fondo.
+        // HOTPLUG (Phase 5): new output => new background surface.
         self.create_surface_for_output(conn, qh, &output);
     }
 
@@ -923,7 +923,7 @@ impl OutputHandler for BackgroundState {
         _qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        // La info de la salida (nombre/tamaño) llegó o cambió.
+        // The output's info (name/size) arrived or changed.
         let info = self.output_state.info(&output);
         let new_info = OutputInfo {
             name: info.as_ref().and_then(|i| i.name.clone()),
@@ -936,7 +936,7 @@ impl OutputHandler for BackgroundState {
         {
             if entry.info.name != new_info.name {
                 log::info!(
-                    "salida renombrada: {:?} → {:?}",
+                    "output renamed: {:?} → {:?}",
                     entry.info.name,
                     new_info.name
                 );
@@ -951,18 +951,15 @@ impl OutputHandler for BackgroundState {
         _qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        // HOTPLUG: la salida se fue => su superficie se destruye con ella.
+        // HOTPLUG: the output is gone => its surface dies with it.
         let before = self.outputs.len();
         self.outputs
             .retain(|o| o.output.as_ref().is_none_or(|x| x.id() != output.id()));
         if self.outputs.len() != before {
-            log::info!(
-                "salida retirada; superficies restantes: {}",
-                self.outputs.len()
-            );
+            log::info!("output removed; remaining surfaces: {}", self.outputs.len());
         }
         if self.outputs.is_empty() {
-            log::info!("sin salidas: el fondo termina");
+            log::info!("no outputs: the background ends");
             self.closed = true;
         }
     }
@@ -970,17 +967,17 @@ impl OutputHandler for BackgroundState {
 
 impl LayerShellHandler for BackgroundState {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        // El compositor cerró UNA superficie (p. ej. la salida se fue).
+        // The compositor closed ONE surface (e.g. its output went away).
         if let Some(idx) = self.entry_by_surface(layer.wl_surface()) {
             let name = self.outputs[idx].info.name.clone();
             self.outputs.remove(idx);
             log::info!(
-                "superficie cerrada por el compositor ({name:?}); restantes: {}",
+                "surface closed by the compositor ({name:?}); remaining: {}",
                 self.outputs.len()
             );
         }
         if self.outputs.is_empty() {
-            log::info!("el compositor cerró el fondo completo");
+            log::info!("the compositor closed the whole background");
             self.closed = true;
         }
     }
@@ -997,14 +994,15 @@ impl LayerShellHandler for BackgroundState {
             return;
         };
         let (w, h) = configure.new_size;
-        // Con anchor a 4 bordes el tamaño lo impone el compositor; si
-        // llegara 0 (no debería), usamos un mínimo digno para no morir.
+        // With the 4-edge anchor the compositor imposes the size; if 0
+        // ever arrived (it shouldn't), we use a dignified minimum rather
+        // than dying.
         let entry = &mut self.outputs[idx];
         entry.width = w.max(1);
         entry.height = h.max(1);
         entry.configured = true;
-        // Redibujar en CADA configure: así sobrevivimos a recargas de
-        // configuración de niri y a cambios de resolución de salida.
+        // Repaint on EVERY configure: this is how we survive niri config
+        // reloads and output resolution changes.
         self.draw_entry(idx);
     }
 }
@@ -1015,8 +1013,8 @@ impl ShmHandler for BackgroundState {
     }
 }
 
-// Despacho del protocolo foreign-toplevel (pausa en fullscreen, D12).
-// wayland-client exige los impls sobre el estado dueño de la cola.
+// Dispatch of the foreign-toplevel protocol (fullscreen pause, D12).
+// wayland-client requires the impls on the queue-owning state.
 impl wayland_client::Dispatch<ZwlrForeignToplevelManagerV1, ()> for BackgroundState {
     fn event(
         state: &mut Self,
@@ -1032,17 +1030,17 @@ impl wayland_client::Dispatch<ZwlrForeignToplevelManagerV1, ()> for BackgroundSt
             MgrEvent::Finished => {
                 state.toplevel.reset();
                 log::info!(
-                    "foreign-toplevel retirado por el compositor; pausa fullscreen desactivada"
+                    "foreign-toplevel withdrawn by the compositor; fullscreen pause disabled"
                 );
             }
             _ => {}
         }
     }
 
-    // El evento `toplevel` (opcode 0) CREA un objeto hijo (el handle de
-    // la ventana): wayland-client exige declarar su user-data aquí, o
-    // el dispatcher paniquea en runtime. Los handles usan () como
-    // user-data, igual que el manager.
+    // The `toplevel` event (opcode 0) CREATES a child object (the
+    // window's handle): wayland-client requires declaring its user-data
+    // here, or the dispatcher panics at runtime. Handles use () as
+    // user-data, like the manager.
     event_created_child!(BackgroundState, ZwlrForeignToplevelManagerV1, [
         zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
     ]);
@@ -1060,8 +1058,8 @@ impl wayland_client::Dispatch<ZwlrForeignToplevelHandleV1, ()> for BackgroundSta
         use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_handle_v1::Event as HEvent;
         match event {
             HEvent::State { state: states } => {
-                // El array del protocolo es una lista de u32 crudos
-                // (enum `state`); wayland-client lo entrega como Vec<u8>.
+                // The protocol's array is a list of raw u32s (`state`
+                // enum); wayland-client delivers it as a Vec<u8>.
                 state.toplevel.toplevel_state(handle, &states);
             }
             HEvent::Title { title } => state.toplevel.toplevel_title(handle, title),
@@ -1083,9 +1081,9 @@ impl ProvidesRegistryState for BackgroundState {
     registry_handlers![OutputState];
 }
 
-// Dispatch de wl_surface/wl_callback/wl_buffer/layer-shell: los user-data
-// de sctk implementan Dispatch2 contra nuestros traits handler; esta macro
-// genera los impls Dispatch requeridos por wayland-client.
+// Dispatch of wl_surface/wl_callback/wl_buffer/layer-shell: sctk's
+// user-data implements Dispatch2 against our handler traits; this macro
+// generates the Dispatch impls wayland-client requires.
 delegate_dispatch2!(BackgroundState);
 
 #[cfg(test)]
@@ -1093,17 +1091,17 @@ mod tests {
     use super::buffer_pixels;
 
     #[test]
-    fn escala_1_deja_el_tamano_logico() {
+    fn scale_1_keeps_logical_size() {
         assert_eq!(buffer_pixels((1920, 1200), 1), (1920, 1200));
     }
 
     #[test]
-    fn escala_2_duplica_los_pixeles() {
+    fn scale_2_doubles_pixels() {
         assert_eq!(buffer_pixels((1920, 1200), 2), (3840, 2400));
     }
 
     #[test]
-    fn tamano_cero_no_se_infla() {
+    fn zero_size_stays_zero() {
         assert_eq!(buffer_pixels((0, 1200), 2), (0, 2400));
     }
 }

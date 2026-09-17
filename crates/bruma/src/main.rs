@@ -1,10 +1,10 @@
-//! CLI del motor bruma.
+//! bruma engine's CLI.
 //!
-//! Estado: **Fase 5**. Subcomandos: `run` (color, imagen, shader o
-//! paquete — uno para todas las salidas con flags, o por salida vía
-//! config persistente), `validate`/`install`/`list`/`pack` (formato
-//! `.wallpaper`), `config` (init/show) y `service` (instalación como
-//! servicio de usuario systemd). `new` llegará con la Fase 6.
+//! Status: **Phase 5**. Subcommands: `run` (color, image, shader or
+//! package — one for all outputs with flags, or per output via the
+//! persistent config), `validate`/`install`/`list`/`pack` (the
+//! `.wallpaper` format), `config` (init/show) and `service` (systemd user
+//! service installation). `new` arrives with Phase 6.
 
 use bruma_core::Color;
 use std::time::Duration;
@@ -12,10 +12,10 @@ use std::time::Duration;
 mod config;
 
 fn main() {
-    // Logging mínimo sin dependencias; cuando el proyecto lo necesite se
-    // elegirá una facade con criterio (ver D8: auditar dependencias).
-    // Nivel de detalle: BRUMA_DEBUG=1 activa trazas (de momento solo info).
-    log::set_logger(&BRUMA_LOGGER).expect("logger único");
+    // Minimal logging with no dependencies; when the project needs more, a
+    // facade will be chosen with care (see D8: audit dependencies).
+    // Verbosity: BRUMA_DEBUG=1 enables traces (info only for now).
+    log::set_logger(&BRUMA_LOGGER).expect("single logger");
     log::set_max_level(log::LevelFilter::Info);
 
     let mut args = std::env::args().skip(1);
@@ -29,26 +29,26 @@ fn main() {
         Some("service") => service_command(&args.collect::<Vec<_>>()),
         Some("--version") | Some("-V") | None => {
             println!(
-                "bruma v{} — motor libre de wallpapers animados para Wayland",
+                "bruma v{} — free animated wallpaper engine for Wayland",
                 bruma_core::ENGINE_VERSION
             );
             if std::env::args().count() == 1 {
                 eprintln!(
-                    "\nUso: bruma <COMANDO>\n\nComandos:\n  run [opciones] [color]   Fondo detrás de las ventanas (sin flags, usa la config)\n  validate PAQUETE         Valida un archivo .wallpaper\n  install PAQUETE          Instala un paquete\n  list                     Lista los paquetes instalados\n  pack DIRECTORIO          Empaqueta un directorio en .wallpaper\n  config init|show         Crea/muestra la config persistente\n  service install|remove   Arranca con la sesión (servicio de usuario)"
+                    "\nUsage: bruma <COMMAND>\n\nCommands:\n  run [options] [color]    Background behind the windows (no flags: uses the config)\n  validate PACKAGE         Validates a .wallpaper file\n  install PACKAGE          Installs a package\n  list                     Lists installed packages\n  pack DIRECTORY           Packs a directory into .wallpaper\n  config init|show         Creates/shows the persistent config\n  service install|remove   Starts with the session (user service)"
                 );
             }
         }
         Some(other) => {
             eprintln!(
-                "comando desconocido: {other}\n\nComandos disponibles:\n  run | validate | install | list | pack | config | service"
+                "unknown command: {other}\n\nAvailable commands:\n  run | validate | install | list | pack | config | service"
             );
             std::process::exit(2);
         }
     }
 }
 
-/// Directorio de instalación: `$XDG_DATA_HOME/bruma/wallpapers`
-/// (`~/.local/share/bruma/wallpapers` por defecto).
+/// Install directory: `$XDG_DATA_HOME/bruma/wallpapers`
+/// (`~/.local/share/bruma/wallpapers` by default).
 fn default_store() -> bruma_package::Store {
     let data_home = std::env::var("XDG_DATA_HOME")
         .ok()
@@ -61,28 +61,28 @@ fn default_store() -> bruma_package::Store {
     bruma_package::Store::new(data_home.join("bruma/wallpapers"))
 }
 
-/// Lee un archivo .wallpaper completo a memoria (los límites anti-bomba
-/// de `bruma-package` operan sobre los bytes).
+/// Reads a whole .wallpaper file into memory (bruma-package's anti-bomb
+/// limits operate on the bytes).
 fn read_package(path: &str) -> Vec<u8> {
     std::fs::read(path).unwrap_or_else(|e| {
-        eprintln!("error: no se pudo leer {path}: {e}");
+        eprintln!("error: could not read {path}: {e}");
         std::process::exit(1);
     })
 }
 
 fn validate_command(args: &[String]) {
     let Some(path) = args.first() else {
-        eprintln!("uso: bruma validate PAQUETE.wallpaper");
+        eprintln!("usage: bruma validate PACKAGE.wallpaper");
         std::process::exit(2);
     };
     let bytes = read_package(path);
     match bruma_package::Store::validate(&bytes) {
         Ok(m) => {
-            println!("✔ {path} es un paquete válido:");
+            println!("✔ {path} is a valid package:");
             println!("{m}");
         }
         Err(e) => {
-            eprintln!("✘ {path} NO es válido:\n  {e}");
+            eprintln!("✘ {path} is NOT valid:\n  {e}");
             std::process::exit(1);
         }
     }
@@ -90,12 +90,12 @@ fn validate_command(args: &[String]) {
 
 fn install_command(args: &[String]) {
     let Some(path) = args.first() else {
-        eprintln!("uso: bruma install PAQUETE.wallpaper");
+        eprintln!("usage: bruma install PACKAGE.wallpaper");
         std::process::exit(2);
     };
     let bytes = read_package(path);
     let manifest = bruma_package::Store::validate(&bytes).unwrap_or_else(|e| {
-        eprintln!("error: paquete inválido: {e}");
+        eprintln!("error: invalid package: {e}");
         std::process::exit(1);
     });
     let store = default_store();
@@ -107,18 +107,18 @@ fn install_command(args: &[String]) {
         });
     if installed {
         println!(
-            "✔ instalado '{}' {} en {}",
+            "✔ installed '{}' {} at {}",
             manifest.title,
             manifest.version,
             dest.display()
         );
         println!(
-            "  pruébalo con: bruma run --package {}",
+            "  try it with: bruma run --package {}",
             manifest.install_name()
         );
     } else {
         println!(
-            "• '{}' {} ya estaba instalado en {}",
+            "• '{}' {} was already installed at {}",
             manifest.title,
             manifest.version,
             dest.display()
@@ -130,7 +130,7 @@ fn list_command() {
     let store = default_store();
     let pkgs = store.installed();
     if pkgs.is_empty() {
-        println!("no hay paquetes instalados (usa: bruma install PAQUETE.wallpaper)");
+        println!("no packages installed (use: bruma install PACKAGE.wallpaper)");
         return;
     }
     for (name, version, path) in pkgs {
@@ -140,7 +140,7 @@ fn list_command() {
 
 fn pack_command(args: &[String]) {
     let Some(dir) = args.first() else {
-        eprintln!("uso: bruma pack DIRECTORIO [-o SALIDA.wallpaper]");
+        eprintln!("usage: bruma pack DIRECTORY [-o OUTPUT.wallpaper]");
         std::process::exit(2);
     };
     let mut out: Option<std::path::PathBuf> = None;
@@ -149,7 +149,7 @@ fn pack_command(args: &[String]) {
         match args[i].as_str() {
             "-o" => {
                 let v = args.get(i + 1).unwrap_or_else(|| {
-                    eprintln!("-o requiere una ruta de salida");
+                    eprintln!("-o requires an output path");
                     std::process::exit(2);
                 });
                 out = Some(std::path::PathBuf::from(v));
@@ -157,14 +157,14 @@ fn pack_command(args: &[String]) {
             }
             other => {
                 eprintln!(
-                    "argumento desconocido: {other}\nuso: bruma pack DIRECTORIO [-o SALIDA.wallpaper]"
+                    "unknown argument: {other}\nusage: bruma pack DIRECTORY [-o OUTPUT.wallpaper]"
                 );
                 std::process::exit(2);
             }
         }
     }
     match bruma_package::Store::pack(std::path::Path::new(dir), out.as_deref()) {
-        Ok(p) => println!("✔ empaquetado en {}", p.display()),
+        Ok(p) => println!("✔ packed into {}", p.display()),
         Err(e) => {
             eprintln!("error: {e}");
             std::process::exit(1);
@@ -176,9 +176,9 @@ fn config_command(args: &[String]) {
     match args.first().map(|s| s.as_str()) {
         Some("init") => match config::Config::write_example() {
             Ok(p) => {
-                println!("✔ config de ejemplo escrita en {}", p.display());
+                println!("✔ example config written to {}", p.display());
                 println!(
-                    "  edítala (los nombres de salida salen de `niri msg outputs`) y lanza: bruma run"
+                    "  edit it (output names come from `niri msg outputs`) and start: bruma run"
                 );
             }
             Err(e) => {
@@ -188,29 +188,29 @@ fn config_command(args: &[String]) {
         },
         Some("show") => {
             if let Some(p) = config::Config::default_path() {
-                println!("ruta: {}", p.display());
+                println!("path: {}", p.display());
             }
             match config::Config::load() {
                 Ok(Some(c)) => println!("{c:#?}"),
-                Ok(None) => println!("(no existe aún — crea una con: bruma config init)"),
+                Ok(None) => println!("(does not exist yet — create one with: bruma config init)"),
                 Err(e) => {
-                    eprintln!("✘ config inválida: {e}");
+                    eprintln!("✘ invalid config: {e}");
                     std::process::exit(1);
                 }
             }
         }
         _ => {
-            eprintln!("uso: bruma config <init|show>");
+            eprintln!("usage: bruma config <init|show>");
             std::process::exit(2);
         }
     }
 }
 
-/// Plantilla de la unidad de usuario: arranca con la sesión gráfica y
-/// revive si muere. `run` sin flags carga la config persistente.
+/// User unit template: starts with the graphical session and revives if it
+/// dies. `run` with no flags loads the persistent config.
 const SYSTEMD_UNIT: &str = "\
 [Unit]
-Description=bruma — motor de wallpapers animados (Wayland)
+Description=bruma — animated wallpaper engine (Wayland)
 PartOf=graphical-session.target
 After=graphical-session.target
 
@@ -225,7 +225,7 @@ WantedBy=graphical-session.target
 
 fn service_command(args: &[String]) {
     let Some(home) = std::env::var("HOME").ok().filter(|h| !h.is_empty()) else {
-        eprintln!("error: sin HOME no hay unidad de usuario");
+        eprintln!("error: without HOME there is no user unit");
         std::process::exit(1);
     };
     let unit_dir = std::path::PathBuf::from(home).join(".config/systemd/user");
@@ -241,7 +241,7 @@ fn service_command(args: &[String]) {
     match args.first().map(|s| s.as_str()) {
         Some("install") => {
             let exe = std::env::current_exe().unwrap_or_else(|e| {
-                eprintln!("error: no sé dónde está el binario: {e}");
+                eprintln!("error: cannot locate the binary: {e}");
                 std::process::exit(1);
             });
             std::fs::create_dir_all(&unit_dir).unwrap_or_else(|e| {
@@ -256,15 +256,15 @@ fn service_command(args: &[String]) {
                 eprintln!("error: {}: {e}", unit_path.display());
                 std::process::exit(1);
             });
-            println!("✔ unidad escrita en {}", unit_path.display());
+            println!("✔ unit written to {}", unit_path.display());
             if systemctl(&["daemon-reload"]) && systemctl(&["enable", "--now", "bruma.service"]) {
                 println!(
-                    "✔ servicio habilitado y arrancado (revive si muere; arranca con la sesión)"
+                    "✔ service enabled and started (revives if it dies; starts with the session)"
                 );
                 println!("  logs: journalctl --user -u bruma.service -f");
             } else {
-                eprintln!("⚠ systemctl --user no respondió: la unidad quedó escrita;");
-                eprintln!("  revisa con: systemctl --user status bruma.service");
+                eprintln!("⚠ systemctl --user did not respond: the unit was written;");
+                eprintln!("  check with: systemctl --user status bruma.service");
                 std::process::exit(1);
             }
         }
@@ -273,10 +273,10 @@ fn service_command(args: &[String]) {
             match std::fs::remove_file(&unit_path) {
                 Ok(()) => {
                     let _ = systemctl(&["daemon-reload"]);
-                    println!("✔ servicio eliminado");
+                    println!("✔ service removed");
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    println!("• no había servicio instalado");
+                    println!("• no service was installed");
                 }
                 Err(e) => {
                     eprintln!("error: {}: {e}", unit_path.display());
@@ -285,29 +285,30 @@ fn service_command(args: &[String]) {
             }
         }
         _ => {
-            eprintln!("uso: bruma service <install|remove>");
+            eprintln!("usage: bruma service <install|remove>");
             std::process::exit(2);
         }
     }
 }
 
-/// Fuente ya resuelta para UNA salida (Fase 5).
-enum Fuente {
-    /// Shader animado (de paquete o suelto) con overrides por posición.
+/// An already-resolved source for ONE output (Phase 5).
+enum Source {
+    /// Animated shader (from a package or a loose file) with overrides by
+    /// position.
     Shader {
         path: String,
         overrides: Vec<(usize, f32)>,
     },
-    /// Imagen estática.
-    Imagen(String),
-    /// Color SHM para esta salida (fallback o contenido).
+    /// Static image.
+    Image(String),
+    /// SHM color for this output (fallback or content).
     Color(u32),
-    /// Sin fuente → color global de la ventana.
-    Nada,
+    /// No source → the window's global color.
+    None,
 }
 
-/// Resuelve `nombre[:versión]` instalado → (ruta, manifiesto), con las
-/// validaciones de siempre (min_engine, tipo shader).
+/// Resolves an installed `name[:version]` → (path, manifest), with the
+/// usual validations (min_engine, shader type).
 fn resolve_package(spec: &str) -> (std::path::PathBuf, bruma_package::Manifest) {
     let store = default_store();
     let (pkg, want_ver) = match spec.split_once(':') {
@@ -321,29 +322,29 @@ fn resolve_package(spec: &str) -> (std::path::PathBuf, bruma_package::Manifest) 
         }
     }
     let Some((_ver, pkg_path)) = found else {
-        eprintln!("error: no hay instalado '{spec}' (ver: bruma list)");
+        eprintln!("error: nothing installed named '{spec}' (see: bruma list)");
         std::process::exit(1);
     };
     let json = std::fs::read_to_string(pkg_path.join("wallpaper.json")).unwrap_or_else(|e| {
-        eprintln!("error: paquete sin manifiesto: {e}");
+        eprintln!("error: package without a manifest: {e}");
         std::process::exit(1);
     });
     let manifest = bruma_package::Manifest::parse(&json).unwrap_or_else(|e| {
-        eprintln!("error: manifiesto inválido: {e}");
+        eprintln!("error: invalid manifest: {e}");
         std::process::exit(1);
     });
     if let Some(min) = &manifest.min_engine
         && min.as_str() > bruma_core::ENGINE_VERSION
     {
         eprintln!(
-            "error: el paquete requiere motor >= {min} y este es {}",
+            "error: the package requires engine >= {min} and this is {}",
             bruma_core::ENGINE_VERSION
         );
         std::process::exit(1);
     }
     if manifest.wallpaper_type != "shader" {
         eprintln!(
-            "error: el paquete es de tipo '{}' (reservado, aún sin implementar)",
+            "error: the package is of type '{}' (reserved, not implemented yet)",
             manifest.wallpaper_type
         );
         std::process::exit(1);
@@ -351,12 +352,12 @@ fn resolve_package(spec: &str) -> (std::path::PathBuf, bruma_package::Manifest) 
     (pkg_path, manifest)
 }
 
-/// Resuelve una entrada de config (o flags legacy) a [`Fuente`].
+/// Resolves a config entry (or legacy flags) into a [`Source`].
 ///
-/// `cli_overrides` son los `--param nombre=valor` del modo legacy (con
-/// config, los params viven en la propia entrada). Los desconocidos son
-/// error: los typos deben doler, no ignorarse.
-fn resolver_fuente(
+/// `cli_overrides` are the legacy-mode `--param name=value` flags (with a
+/// config, params live in the entry itself). Unknown ones are an error:
+/// typos must hurt, not be ignored.
+fn resolve_source(
     oc: &config::OutputConfig,
     cli_overrides: &[(String, f32)],
     pkg_cache: &mut std::collections::HashMap<
@@ -365,7 +366,7 @@ fn resolver_fuente(
     >,
     runtime_params: &mut Vec<bruma_runtime::ParamValue>,
     manifest_fps: &mut Option<u32>,
-) -> Fuente {
+) -> Source {
     if let Some(spec) = &oc.package {
         let entry = pkg_cache
             .entry(spec.clone())
@@ -384,56 +385,56 @@ fn resolver_fuente(
                 })
                 .collect();
         }
-        // Overrides: config primero, CLI encima; nombre → posición.
-        let mut pares = config::params_a_pares(&oc.params).unwrap_or_else(|e| {
+        // Overrides: config first, CLI on top; name → position.
+        let mut pairs = config::params_to_pairs(&oc.params).unwrap_or_else(|e| {
             eprintln!("error: {e}");
             std::process::exit(2);
         });
-        pares.extend(cli_overrides.iter().cloned());
+        pairs.extend(cli_overrides.iter().cloned());
         let mut overrides = Vec::new();
-        for (name, value) in pares {
+        for (name, value) in pairs {
             match manifest.params.iter().position(|p| p.name == name) {
                 Some(pos) => overrides.push((pos, value.clamp(0.0, 1.0))),
                 None => {
-                    eprintln!("error: '{spec}' no declara el parámetro '{name}'");
+                    eprintln!("error: '{spec}' does not declare parameter '{name}'");
                     std::process::exit(2);
                 }
             }
         }
-        return Fuente::Shader {
+        return Source::Shader {
             path: pkg_path.join(&manifest.entry).display().to_string(),
             overrides,
         };
     }
     if let Some(p) = &oc.shader {
-        return Fuente::Shader {
+        return Source::Shader {
             path: p.clone(),
             overrides: Vec::new(),
         };
     }
     if let Some(p) = &oc.image {
-        return Fuente::Imagen(p.clone());
+        return Source::Image(p.clone());
     }
     match &oc.color {
-        Some(c) => Fuente::Color(config::parse_color_hex(c).unwrap_or_else(|e| {
+        Some(c) => Source::Color(config::parse_color_hex(c).unwrap_or_else(|e| {
             eprintln!("error: {e}");
             std::process::exit(2);
         })),
-        None => Fuente::Nada,
+        None => Source::None,
     }
 }
 
 fn run_command(args: &[String]) {
     let mut color_arg: Option<&str> = None;
-    // `--gpu` fuerza init de GPU aunque la fuente elegida sea color
-    // (útil para calentar shaders/driver antes de cambiar de fuente).
+    // `--gpu` forces GPU init even if the chosen source is a color (handy
+    // to warm up shaders/driver before switching sources).
     let mut gpu = false;
     let mut image_path: Option<String> = None;
     let mut shader_path: Option<String> = None;
     let mut package: Option<String> = None;
     let mut fps: Option<u32> = None;
-    // Fase 3: `--param=VALOR` directo. Con manifiesto, `--param
-    // nombre=VALOR` resuelve por nombre (ver más abajo).
+    // Phase 3: direct `--param=VALUE`. With a manifest, `--param
+    // name=VALUE` resolves by name (see below).
     let mut param0: Option<f32> = None;
     let mut named_params: Vec<(String, f32)> = Vec::new();
     let mut config_path: Option<String> = None;
@@ -444,14 +445,14 @@ fn run_command(args: &[String]) {
             "--image" => {
                 i += 1;
                 image_path = Some(args.get(i).map(|s| s.to_string()).unwrap_or_else(|| {
-                    eprintln!("--image requiere la ruta de una imagen");
+                    eprintln!("--image requires an image path");
                     std::process::exit(2);
                 }));
             }
             "--shader" => {
                 i += 1;
                 shader_path = Some(args.get(i).map(|s| s.to_string()).unwrap_or_else(|| {
-                    eprintln!("--shader requiere la ruta de un archivo .wgsl");
+                    eprintln!("--shader requires the path to a .wgsl file");
                     std::process::exit(2);
                 }));
             }
@@ -459,7 +460,7 @@ fn run_command(args: &[String]) {
                 i += 1;
                 package = Some(args.get(i).map(|s| s.to_string()).unwrap_or_else(|| {
                     eprintln!(
-                        "--package requiere el nombre de un paquete instalado (ver: bruma list)"
+                        "--package requires the name of an installed package (see: bruma list)"
                     );
                     std::process::exit(2);
                 }));
@@ -467,37 +468,37 @@ fn run_command(args: &[String]) {
             "--fps" => {
                 i += 1;
                 fps = Some(args.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| {
-                    eprintln!("--fps requiere un número entero (ej: --fps 60)");
+                    eprintln!("--fps requires an integer (e.g. --fps 60)");
                     std::process::exit(2);
                 }));
             }
-            // Fase 5: config explícita (excluyente con flags de fuente).
+            // Phase 5: explicit config (exclusive with source flags).
             "--config" => {
                 i += 1;
                 config_path = Some(args.get(i).map(|s| s.to_string()).unwrap_or_else(|| {
-                    eprintln!("--config requiere la ruta de un config.json");
+                    eprintln!("--config requires the path to a config.json");
                     std::process::exit(2);
                 }));
             }
-            // Fase 3: `--param=0.5` (parámetro 0). Fase 4: además
-            // `--param=intensidad=0.5` cuando hay manifiesto que dé nombres.
+            // Phase 3: `--param=0.5` (parameter 0). Phase 4: also
+            // `--param=intensidad=0.5` when a manifest provides names.
             p if p.starts_with("--param=") => {
-                // Tras el prefijo: `VALOR` (parámetro 0) o `NOMBRE=VALOR`.
+                // After the prefix: `VALUE` (parameter 0) or `NAME=VALUE`.
                 let rest = &p["--param=".len()..];
                 match rest.split_once('=') {
-                    // `--param=VALOR`: sin nombre → parámetro 0 (u_params0).
+                    // `--param=VALUE`: no name → parameter 0 (u_params0).
                     None => {
                         let value = rest.parse::<f32>().unwrap_or_else(|_| {
-                            eprintln!("--param: '{rest}' no es un número (0..1)");
+                            eprintln!("--param: '{rest}' is not a number (0..1)");
                             std::process::exit(2);
                         });
                         param0 = Some(value.clamp(0.0, 1.0));
                     }
-                    // `--param=NOMBRE=VALOR`: con nombre (solo válido con
-                    // paquete; se valida tras cargar el manifiesto).
+                    // `--param=NAME=VALUE`: with a name (only valid with a
+                    // package; validated after loading the manifest).
                     Some((name, v)) => {
                         let value = v.parse::<f32>().unwrap_or_else(|_| {
-                            eprintln!("--param: '{v}' no es un número (0..1)");
+                            eprintln!("--param: '{v}' is not a number (0..1)");
                             std::process::exit(2);
                         });
                         named_params.push((name.trim().to_owned(), value));
@@ -505,7 +506,7 @@ fn run_command(args: &[String]) {
                 }
             }
             "--param" => {
-                eprintln!("--param requiere el formato --param[=nombre]=VALOR (0..1)");
+                eprintln!("--param requires the form --param[=name]=VALUE (0..1)");
                 std::process::exit(2);
             }
             other => color_arg = Some(other),
@@ -513,19 +514,19 @@ fn run_command(args: &[String]) {
         i += 1;
     }
 
-    // Modo de fuentes: flags explícitos = UNA fuente para todas las
-    // salidas (comportamiento previo, ideal para pruebas). Sin flags,
-    // manda la config persistente (auto-carga si existe).
+    // Source mode: explicit flags = ONE source for all outputs (previous
+    // behavior, ideal for testing). Without flags, the persistent config
+    // rules (auto-loaded if it exists).
     let explicit_source =
         shader_path.is_some() || image_path.is_some() || package.is_some() || color_arg.is_some();
     let cfg = match &config_path {
         Some(p) => {
             if explicit_source {
-                eprintln!("error: --config es excluyente con --package/--shader/--image/color");
+                eprintln!("error: --config is exclusive with --package/--shader/--image/color");
                 std::process::exit(2);
             }
             let text = std::fs::read_to_string(p).unwrap_or_else(|e| {
-                eprintln!("error: no se pudo leer {p}: {e}");
+                eprintln!("error: could not read {p}: {e}");
                 std::process::exit(1);
             });
             let c: config::Config = serde_json::from_str(&text).unwrap_or_else(|e| {
@@ -536,14 +537,14 @@ fn run_command(args: &[String]) {
                 eprintln!("error: {p}: {e}");
                 std::process::exit(1);
             });
-            log::info!("config explícita: {p}");
+            log::info!("explicit config: {p}");
             Some(c)
         }
         None if explicit_source => None,
         None => match config::Config::load() {
             Ok(c) => {
                 if c.is_some() {
-                    log::info!("config persistente cargada (run sin flags usa la config)");
+                    log::info!("persistent config loaded (bare run uses the config)");
                 }
                 c
             }
@@ -554,109 +555,100 @@ fn run_command(args: &[String]) {
         },
     };
 
-    // Color GLOBAL (fallback de últimas: sin renderer y sin color de
-    // salida). Con config, el color por salida vive en su Fuente::Color.
+    // GLOBAL color (last-resort fallback: no renderer and no output
+    // color). With a config, the per-output color lives in its
+    // Source::Color.
     let color = color_arg
         .map(|s| {
             let v = s.trim().trim_start_matches("0x").trim_start_matches('#');
             u32::from_str_radix(v, 16).unwrap_or_else(|_| {
-                eprintln!("color inválido: {s} (usa hex, ej: 0x3B4252)");
+                eprintln!("invalid color: {s} (use hex, e.g. 0x3B4252)");
                 std::process::exit(2);
             })
         })
-        .unwrap_or(0x2E_34_40); // gris azulado oscuro por defecto
+        .unwrap_or(0x2E_34_40); // default dark bluish gray
 
-    // Resolución de fuentes por salida (la única verdad para la factory).
+    // Per-output source resolution (the single source of truth for the
+    // factory).
     let mut pkg_cache: std::collections::HashMap<
         String,
         (std::path::PathBuf, bruma_package::Manifest),
     > = Default::default();
     let mut manifest_fps: Option<u32> = None;
     let mut runtime_params: Vec<bruma_runtime::ParamValue> = Vec::new();
-    let mut tiene_contenido = false;
+    let mut has_content = false;
 
-    let cli_overrides: Vec<(String, f32)> = {
-        let mut v = named_params.clone();
-        if let Some(v0) = param0 {
-            // `--param=VALOR` sin manifiesto no toca esto: sin nombres,
-            // la CLI lo resuelve después vía with_param.
-            if !v.is_empty() || package.is_some() {
-                v.push(("<posición 0>".to_owned(), v0));
-                v.pop();
-            }
-        }
-        v
-    };
+    let cli_overrides: Vec<(String, f32)> = named_params.clone();
 
-    let mut por_salida: Vec<(String, Fuente)> = Vec::new();
-    let mut default_fuente = Fuente::Nada;
+    let mut per_output: Vec<(String, Source)> = Vec::new();
+    let mut default_source = Source::None;
     if let Some(cfg) = &cfg {
         if let Some(d) = &cfg.default {
-            default_fuente = resolver_fuente(
+            default_source = resolve_source(
                 d,
                 &[],
                 &mut pkg_cache,
                 &mut runtime_params,
                 &mut manifest_fps,
             );
-            tiene_contenido |= d.has_content();
+            has_content |= d.has_content();
         }
         for (name, oc) in &cfg.outputs {
-            let f = resolver_fuente(
+            let f = resolve_source(
                 oc,
                 &[],
                 &mut pkg_cache,
                 &mut runtime_params,
                 &mut manifest_fps,
             );
-            tiene_contenido |= oc.has_content();
-            por_salida.push((name.clone(), f));
+            has_content |= oc.has_content();
+            per_output.push((name.clone(), f));
         }
     } else {
-        // Legacy: una fuente para todas las salidas.
+        // Legacy: one source for all outputs.
         if let Some(spec) = &package {
             let oc = config::OutputConfig {
                 package: Some(spec.clone()),
                 ..Default::default()
             };
-            default_fuente = resolver_fuente(
+            default_source = resolve_source(
                 &oc,
                 &cli_overrides,
                 &mut pkg_cache,
                 &mut runtime_params,
                 &mut manifest_fps,
             );
-            tiene_contenido = true;
+            has_content = true;
         } else if let Some(p) = &shader_path {
-            default_fuente = Fuente::Shader {
+            default_source = Source::Shader {
                 path: p.clone(),
                 overrides: Vec::new(),
             };
-            tiene_contenido = true;
+            has_content = true;
         } else if let Some(p) = &image_path {
-            default_fuente = Fuente::Imagen(p.clone());
-            tiene_contenido = true;
+            default_source = Source::Image(p.clone());
+            has_content = true;
         } else {
-            default_fuente = Fuente::Color(color);
+            default_source = Source::Color(color);
         }
     }
 
-    // Precedencia de FPS: flag > config > manifiesto > 30.
+    // FPS precedence: flag > config > manifest > 30.
     let fps = fps
         .or_else(|| cfg.as_ref().and_then(|c| c.fps))
         .or(manifest_fps)
         .unwrap_or(30);
 
     log::info!(
-        "bruma run — modo {}{}",
-        if tiene_contenido && por_salida.is_empty() && !matches!(default_fuente, Fuente::Color(_)) {
-            "shader animado"
-        } else if tiene_contenido {
-            "mixto por salida"
+        "bruma run — mode {}{}",
+        if has_content && per_output.is_empty() && !matches!(default_source, Source::Color(_)) {
+            "animated shader"
+        } else if has_content {
+            "per-output mix"
         } else {
-            "color sólido"
+            "solid color"
         },
-        if tiene_contenido {
+        if has_content {
             format!(" ({fps} fps)")
         } else {
             String::new()
@@ -668,66 +660,65 @@ fn run_command(args: &[String]) {
             std::process::exit(1);
         });
 
-    // Fase 5: la factory construye un renderer POR SALIDA. La GPU se
-    // descubre una sola vez (GpuShared se clona barato); cada salida
-    // recibe su propio renderer sobre su propia superficie. El error de
-    // factory degrada esa salida a color sólido sin tumbar el resto.
+    // Phase 5: the factory builds one renderer PER OUTPUT. The GPU is
+    // discovered once (GpuShared clones cheaply); each output gets its own
+    // renderer on its own surface. A factory error degrades that output to
+    // solid color without taking the rest down.
     let mut shared_gpu: Option<bruma_renderer_wgpu::GpuShared> = None;
-    // Con config, una salida puede declarar shader aunque `default` sea
-    // color: la factory lo sabe vía `por_salida`/`default_f` (movidos
-    // dentro). Si hay cualquier shader/imagen en juego, hace falta GPU.
-    let hay_gpu_en_fuentes = |f: &Fuente| matches!(f, Fuente::Shader { .. } | Fuente::Imagen(_));
-    let necesita_gpu = hay_gpu_en_fuentes(&default_fuente)
-        || por_salida.iter().any(|(_, f)| hay_gpu_en_fuentes(f));
-    let _ = &mut gpu;
-    if necesita_gpu || gpu {
+    // With a config, an output may declare a shader even if `default` is a
+    // color: the factory knows via `per_output`/`default_source` (moved
+    // inside). Any shader/image in play requires the GPU.
+    let source_needs_gpu = |f: &Source| matches!(f, Source::Shader { .. } | Source::Image(_));
+    let needs_gpu =
+        source_needs_gpu(&default_source) || per_output.iter().any(|(_, f)| source_needs_gpu(f));
+    if needs_gpu || gpu {
         match bruma_renderer_wgpu::GpuShared::new() {
             Ok(g) => shared_gpu = Some(g),
             Err(e) => {
-                // Sin GPU, el modo color sólido sigue siendo útil.
-                log::warn!("sin GPU ({e}); todas las salidas en color sólido");
+                // Without a GPU, solid-color mode is still useful.
+                log::warn!("no GPU ({e}); all outputs on solid color");
             }
         }
     }
 
-    // Callback de hot-reload compartido por todas las salidas (una sola
-    // notificación aunque haya N superficies recargando el mismo shader).
+    // Hot-reload callback shared by all outputs (a single notification
+    // even with N surfaces reloading the same shader).
     let notifier = std::rc::Rc::new(bruma_platform::DesktopNotifier::new());
     let notify_state: std::rc::Rc<std::cell::RefCell<Option<(String, std::time::Instant)>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
 
-    // Modelo de fuentes COMPARTIDO (Fase 5): la factory lo lee en cada
-    // construcción de renderer (arranque y recargas); el handler de
-    // SIGHUP lo actualiza. Rc<RefCell> porque ambos viven en el hilo del
-    // bucle (sin cruces de hilos, sin Mutex).
-    struct ModeloFuentes {
-        por_salida: Vec<(String, Fuente)>,
-        default: Fuente,
+    // SHARED source model (Phase 5): the factory reads it on every
+    // renderer build (startup and reloads); the SIGHUP handler updates it.
+    // Rc<RefCell> because both live on the loop's thread (no cross-thread,
+    // no Mutex).
+    struct SourceModel {
+        per_output: Vec<(String, Source)>,
+        default: Source,
     }
-    let modelo_fuentes: std::rc::Rc<std::cell::RefCell<ModeloFuentes>> =
-        std::rc::Rc::new(std::cell::RefCell::new(ModeloFuentes {
-            por_salida,
-            default: default_fuente,
+    let source_model: std::rc::Rc<std::cell::RefCell<SourceModel>> =
+        std::rc::Rc::new(std::cell::RefCell::new(SourceModel {
+            per_output,
+            default: default_source,
         }));
 
-    let modelo_f = modelo_fuentes.clone();
+    let model_f = source_model.clone();
     let notifier_f = notifier.clone();
     let notify_state_f = notify_state.clone();
     window.set_renderer_factory(Box::new(move |handles| {
-        let m = modelo_f.borrow();
-        let fuente = handles
+        let m = model_f.borrow();
+        let source = handles
             .output_name
             .as_deref()
-            .and_then(|n| m.por_salida.iter().find(|(name, _)| name == n))
+            .and_then(|n| m.per_output.iter().find(|(name, _)| name == n))
             .map(|(_, f)| f)
             .unwrap_or(&m.default);
         let display = handles.display_ptr;
         let surface = handles.surface_ptr;
-        match fuente {
-            Fuente::Shader { path, overrides } => {
+        match source {
+            Source::Shader { path, overrides } => {
                 let mut renderer = unsafe {
                     bruma_renderer_wgpu::AnimatedRenderer::on_shared(
-                        shared_gpu.as_ref().ok_or("sin GPU")?,
+                        shared_gpu.as_ref().ok_or("no GPU")?,
                         display,
                         surface,
                         std::path::Path::new(path),
@@ -735,13 +726,14 @@ fn run_command(args: &[String]) {
                 }
                 .map_err(|e| e.to_string())?;
                 if !overrides.is_empty() {
-                    // Overrides de ESTA salida (resueltos por nombre
-                    // contra el manifiesto en la CLI).
+                    // THIS output's overrides (resolved by name against
+                    // the manifest in the CLI).
                     renderer.set_param_overrides(overrides.clone());
                 }
 
-                // Aviso de "shader rechazado" visible sin terminal: D-Bus
-                // best-effort con debounce de 2 s (compartido por salidas).
+                // "Shader rejected" notice visible without a terminal:
+                // best-effort D-Bus with a 2 s debounce (shared by
+                // outputs).
                 let notifier = notifier_f.clone();
                 let last = notify_state_f.clone();
                 renderer.set_reload_callback(Box::new(move |event| {
@@ -774,10 +766,10 @@ fn run_command(args: &[String]) {
                     renderer,
                 )))
             }
-            Fuente::Imagen(path) => Ok(bruma_platform::FactoryRenderer::renderer(Box::new(
+            Source::Image(path) => Ok(bruma_platform::FactoryRenderer::renderer(Box::new(
                 unsafe {
                     bruma_renderer_wgpu::ImageRenderer::on_shared(
-                        shared_gpu.as_ref().ok_or("sin GPU")?,
+                        shared_gpu.as_ref().ok_or("no GPU")?,
                         display,
                         surface,
                         std::path::Path::new(path),
@@ -785,10 +777,10 @@ fn run_command(args: &[String]) {
                 }
                 .map_err(|e| e.to_string())?,
             ))),
-            Fuente::Color(c) => Ok(bruma_platform::FactoryRenderer::color(Color::from_rgb_u32(
+            Source::Color(c) => Ok(bruma_platform::FactoryRenderer::color(Color::from_rgb_u32(
                 *c,
             ))),
-            Fuente::Nada => Err("sin fuente para esta salida".to_owned()),
+            Source::None => Err("no source for this output".to_owned()),
         }
     }));
 
@@ -797,9 +789,9 @@ fn run_command(args: &[String]) {
         std::process::exit(1);
     });
     for r in &reports {
-        let modo = if r.gpu { "gpu" } else { "color" };
+        let mode = if r.gpu { "gpu" } else { "color" };
         log::info!(
-            "fondo activo en {:?}: {}x{}px, escala {} ({modo}) — Ctrl-C para salir",
+            "wallpaper active on {:?}: {}x{}px, scale {} ({mode}) — Ctrl-C to exit",
             r.name,
             r.width,
             r.height,
@@ -807,20 +799,20 @@ fn run_command(args: &[String]) {
         );
     }
 
-    // Recarga de config en caliente: SIGHUP → re-parsear y actualizar el
-    // modelo de fuentes (la plataforma reconstituye los renderers vía
-    // factory y repinta). Alcance: fuentes y params por salida; un cambio
-    // de fps espera al próximo arranque (el runtime no se muta en caliente).
+    // Hot config reload: SIGHUP → re-parse and update the source model
+    // (the platform rebuilds the renderers via the factory and repaints).
+    // Scope: sources and params per output; an fps change waits for the
+    // next start (the runtime is not mutated hot).
     if cfg.is_some() {
         let notifier_h = notifier.clone();
-        let modelo_h = modelo_fuentes.clone();
+        let model_h = source_model.clone();
         window.on_config_reload(Box::new(move || {
             let cfg_new = match config::Config::load() {
-                // Sin config o rota: el wallpaper SIGUE con la actual.
+                // No config or broken one: the wallpaper KEEPS the current.
                 Ok(Some(c)) => c,
                 Ok(None) => return false,
                 Err(e) => {
-                    log::warn!("config rechazada: {e}");
+                    log::warn!("config rejected: {e}");
                     notifier_h.shader_rejected(&format!("config: {e}"));
                     return false;
                 }
@@ -828,17 +820,17 @@ fn run_command(args: &[String]) {
             let mut pkg_cache = Default::default();
             let mut manifest_fps = None;
             let mut params = Vec::new();
-            let mut m = modelo_h.borrow_mut();
+            let mut m = model_h.borrow_mut();
             if let Some(d) = &cfg_new.default {
-                m.default = resolver_fuente(d, &[], &mut pkg_cache, &mut params, &mut manifest_fps);
+                m.default = resolve_source(d, &[], &mut pkg_cache, &mut params, &mut manifest_fps);
             }
-            m.por_salida = cfg_new
+            m.per_output = cfg_new
                 .outputs
                 .iter()
                 .map(|(name, oc)| {
                     (
                         name.clone(),
-                        resolver_fuente(oc, &[], &mut pkg_cache, &mut params, &mut manifest_fps),
+                        resolve_source(oc, &[], &mut pkg_cache, &mut params, &mut manifest_fps),
                     )
                 })
                 .collect();
@@ -846,16 +838,16 @@ fn run_command(args: &[String]) {
         }));
     }
 
-    // El modo del bucle lo decide el renderer instalado: animado (shader)
-    // conduce frames a la cadencia del runtime; estático (color, imagen,
-    // triángulo) solo atiende eventos.
+    // The loop's mode is decided by the installed renderer: animated
+    // (shader) drives frames at the runtime's pace; static (color, image,
+    // triangle) only attends events.
     let wants_animation = window.wants_animation();
     if wants_animation {
         let mut runtime = bruma_runtime::BasicRuntime::new(fps);
         if !runtime_params.is_empty() {
-            // Defaults del manifiesto; los overrides POR SALIDA ya viven
-            // en cada renderer (la animación sigue sincronizada: un solo
-            // runtime, un solo reloj).
+            // Manifest defaults; the PER-OUTPUT overrides already live in
+            // each renderer (the animation stays synchronized: one
+            // runtime, one clock).
             runtime.set_params(runtime_params);
         } else if let Some(v) = param0 {
             runtime = runtime.with_param("param0", v);
@@ -872,7 +864,7 @@ fn run_command(args: &[String]) {
     }
 }
 
-/// Logger mínimo a stderr, suficiente para la Fase 1.
+/// Minimal stderr logger, enough for Phase 1.
 struct BrumaLogger;
 
 static BRUMA_LOGGER: BrumaLogger = BrumaLogger;

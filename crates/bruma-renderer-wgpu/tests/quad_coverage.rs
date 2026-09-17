@@ -1,65 +1,63 @@
-//! Test de cobertura del quad — la lección del bug de la mitad negra.
+//! Quad coverage test — the lesson from the black-half bug.
 //!
-//! Historia: durante las Fases 2-4 el quad se dibujaba con `draw(0..4)`
-//! en `TriangleList`, que solo genera UN triángulo: la mitad inferior
-//! derecha de la pantalla nunca se pintó y nadie lo notó, porque todas
-//! las verificaciones en vivo medían el píxel (5,5) — dentro del
-//! triángulo que sí funcionaba. El usuario lo vio: un corte diagonal
-//! exacto con el escritorio asomando detrás.
+//! Story: during Phases 2-4 the quad was drawn with `draw(0..4)` under
+//! `TriangleList`, which only generates ONE triangle: the bottom-right
+//! half of the screen never got painted and nobody noticed, because every
+//! live verification measured pixel (5,5) — inside the triangle that did
+//! work. The user saw it: an exact diagonal cut with the desktop showing
+//! through.
 //!
-//! Este test reproduce las condiciones exactas del renderer de
-//! producción (mismo `compile_wgsl`, mismo `build_quad_pipeline`, mismo
-//! WGSL empaquetado en el crate) pero renderiza **offline** a una
-//! textura — sin Wayland, sin superficie — y lee los píxeles de vuelta
-//! para afirmar que las 4 esquinas + centro quedan cubiertas.
+//! This test reproduces the production renderer's exact conditions (same
+//! `compile_wgsl`, same `build_quad_pipeline`, same WGSL packaged in the
+//! crate) but renders **offline** to a texture — no Wayland, no surface —
+//! and reads the pixels back to assert that the 4 corners + center are
+//! covered.
 //!
-//! Regla de verificación que motiva las aserciones (registrada en
-//! `ai-development-log.md`): las 4 esquinas + centro, nunca un punto de
-//! la región sabida-buena.
+//! Verification rule behind the assertions (recorded in
+//! `ai-development-log.md`): the 4 corners + center, never a point in the
+//! known-good region.
 //!
-//! Requiere un adaptador GPU/Vulkan (como el que bruma usa en
-//! producción). Sin adaptador, el test se salta con aviso en vez de
-//! fallar: el CI corre en runners sin GPU, y un wallpaper no puede
-//! exigir más que lo que su propio runtime necesita. En una máquina de
-//! desarrollo (la de todos los hits de este proyecto) corre de lleno.
+//! Requires a GPU/Vulkan adapter (like the one bruma uses in production).
+//! Without an adapter, the test skips with a notice instead of failing:
+//! CI runs on GPU-less runners, and a wallpaper cannot demand more than
+//! its own runtime needs. On a dev machine (where every hit of this
+//! project landed) it runs fully.
 
 use bruma_renderer_wgpu::{build_quad_pipeline, compile_wgsl};
 
-/// Ruta del shader de producción dentro del crate (incluido vía
-/// `include_str!` en el binario; aquí se lee del árbol de fuentes).
+/// Production shader's path inside the crate (included via `include_str!`
+/// in the binary; read from the source tree here).
 const HELLO_WGSL: &str = include_str!("../src/shaders/hello.wgsl");
 
-/// Tamaño del render de prueba. Pequeño (rápido) pero con las esquinas
-/// bien separadas de los bordes para el muestreo interior.
+/// Test render size. Small (fast) but with the corners well away from the
+/// edges for the interior sampling.
 const W: u32 = 256;
 const H: u32 = 256;
 
-/// Muestra un píxel interior de cada región: 8px hacia adentro de cada
-/// esquina y el centro exacto. Con strip roto (solo triángulo 0-1-2),
-/// BR cae fuera del quad y queda con el color de clear.
+/// Samples one interior pixel per region: 8px inward from each corner and
+/// the exact center. With a broken strip (triangle 0-1-2 only), BR falls
+/// outside the quad and keeps the clear color.
 const SAMPLE_INSET: i64 = 8;
 
 #[test]
-fn quad_cubre_las_cuatro_esquinas() {
+fn quad_covers_the_four_corners() {
     let Some((device, queue)) = offline_device() else {
-        eprintln!(
-            "skip: sin adaptador GPU (CI sin vulkan/lavapipe); el test completo corre en dev"
-        );
+        eprintln!("skip: no GPU adapter (CI without vulkan/lavapipe); the full test runs on dev");
         return;
     };
 
-    // Camino de compilación de producción: naga primero, módulo después.
+    // Production compile path: naga first, module after.
     let module = compile_wgsl(&device, HELLO_WGSL, "test-hello")
-        .expect("el shader de producción debe compilar");
+        .expect("the production shader must compile");
 
-    // Mismo layout de uniforms que el renderer animado (48 bytes,
-    // group 0, binding 0) — el shader lo exige.
+    // Same uniform layout as the animated renderer (48 bytes, group 0,
+    // binding 0) — the shader demands it.
     let (bgl, bg, _uniform_buf) = make_uniforms(&device, &queue);
 
-    // El pipeline de producción con el formato del render offline.
+    // The production pipeline with the offline render's format.
     let pipeline = build_quad_pipeline(&device, wgpu::TextureFormat::Rgba8UnormSrgb, &module, &bgl);
 
-    // Textura destino: render attachment + origen de copia.
+    // Destination texture: render attachment + copy source.
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("test-quad-target"),
         size: wgpu::Extent3d {
@@ -76,8 +74,8 @@ fn quad_cubre_las_cuatro_esquinas() {
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-    // Copy de vuelta: las filas van alineadas a 256 bytes.
-    let bytes_per_row = W * 4; // 1024: ya múltiplo de 256
+    // Readback: rows are aligned to 256 bytes.
+    let bytes_per_row = W * 4; // 1024: already a multiple of 256
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("test-quad-readback"),
         size: (bytes_per_row * H) as u64,
@@ -95,8 +93,8 @@ fn quad_cubre_las_cuatro_esquinas() {
                 view: &view,
                 resolve_target: None,
                 depth_slice: None,
-                // Clear ROJO inconfundible: si una esquina queda roja es
-                // que el quad NO la cubrió (el shader nunca pinta rojo).
+                // Unmistakable RED clear: if a corner stays red, the quad
+                // did NOT cover it (the shader never paints red).
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::RED),
                     store: wgpu::StoreOp::Store,
@@ -109,7 +107,7 @@ fn quad_cubre_las_cuatro_esquinas() {
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bg, &[]);
-        // Idéntico al draw del renderer animado.
+        // Identical to the animated renderer's draw.
         pass.draw(0..4, 0..1);
     }
     encoder.copy_texture_to_buffer(
@@ -136,25 +134,25 @@ fn quad_cubre_las_cuatro_esquinas() {
     queue.submit(Some(encoder.finish()));
     device
         .poll(wgpu::PollType::wait_indefinitely())
-        .expect("poll sin errores");
+        .expect("poll without errors");
 
-    // Lectura del buffer: map_async + poll (patrón canónico de los
-    // ejemplos de wgpu; el callback corre dentro del poll).
+    // Buffer read: map_async + poll (canonical pattern from the wgpu
+    // examples; the callback runs inside the poll).
     let slice = readback.slice(..);
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), wgpu::BufferAsyncError>>();
     slice.map_async(wgpu::MapMode::Read, move |r| {
-        tx.send(r).expect("el receptor del map vive");
+        tx.send(r).expect("the map receiver lives");
     });
     device
         .poll(wgpu::PollType::wait_indefinitely())
-        .expect("poll sin errores");
+        .expect("poll without errors");
     rx.recv()
-        .expect("callback del map invocado")
-        .expect("map del readback");
+        .expect("map callback invoked")
+        .expect("readback map");
     let data = {
         let bytes = slice
             .get_mapped_range()
-            .expect("readback mapeado tras el poll");
+            .expect("readback mapped after poll");
         bytes.to_vec()
     };
     readback.unmap();
@@ -164,8 +162,9 @@ fn quad_cubre_las_cuatro_esquinas() {
         [data[off], data[off + 1], data[off + 2], data[off + 3]]
     };
 
-    // Si el bug del TriangleList volviera, BR queda en el clear rojo.
-    let rojo = [255u8, 0, 0, 255];
+    // If the TriangleList bug ever came back, BR would hold the red
+    // clear.
+    let red = [255u8, 0, 0, 255];
     let right = W as i64 - 1 - SAMPLE_INSET;
     let bottom = H as i64 - 1 - SAMPLE_INSET;
     let samples = [
@@ -176,46 +175,43 @@ fn quad_cubre_las_cuatro_esquinas() {
         ("C", px(W as i64 / 2, H as i64 / 2)),
     ];
 
-    // 1) Cobertura: ninguna muestra puede quedar con el clear. Es la
-    // aserción que habría cazado el bug de la mitad negra desde el día 1.
+    // 1) Coverage: no sample may hold the clear color. It is the
+    // assertion that would have caught the black-half bug on day one.
     for (name, c) in &samples {
         assert_ne!(
-            *c, rojo,
-            "la muestra {name} quedó SIN dibujar (color de clear): \
-             el quad no la cubre — ¿se perdió el TriangleStrip?"
+            *c, red,
+            "sample {name} left UNDRAWN (clear color): \
+             the quad does not cover it — was TriangleStrip lost?"
         );
     }
 
-    // 2) Simetría: la onda del shader solo depende de r = |uv·res|, así
-    // que las cuatro muestras de esquina (equidistantes del centro por
-    // construcción) deben tener color idéntico. Una desigualdad delata
-    // quad espejado, desplazado o con winding al revés.
+    // 2) Symmetry: the shader's wave only depends on r = |uv·res|, so the
+    // four corner samples (equidistant from the center by construction)
+    // must have identical color. Any inequality betrays a mirrored,
+    // shifted or wrongly wound quad.
     let (_, tl) = samples[0];
     let (_, tr) = samples[1];
     let (_, bl) = samples[2];
     let (_, br) = samples[3];
-    assert_eq!(tl, tr, "esquinas TL y TR difieren: ¿quad espejado?");
-    assert_eq!(tl, bl, "esquinas TL y BL difieren: ¿quad espejado?");
-    assert_eq!(
-        tl, br,
-        "esquinas TL y BR difieren: ¿quad roto o desplazado?"
-    );
+    assert_eq!(tl, tr, "TL and TR corners differ: mirrored quad?");
+    assert_eq!(tl, bl, "TL and BL corners differ: mirrored quad?");
+    assert_eq!(tl, br, "TL and BR corners differ: broken or shifted quad?");
 
-    // 3) Contraste: con u_time=0, w(centro)=sin(0)=0 y w(esquina)≈0.73
-    // (determinista): el centro DEBE diferir de las esquinas. Si fuera
-    // igual, la textura no refleja la geometría del shader (p. ej.
-    // todo el frame es clear, o el fragment no recibe uv reales).
-    let centro = samples[4].1;
+    // 3) Contrast: with u_time=0, w(center)=sin(0)=0 and w(corner)≈0.73
+    // (deterministic): the center MUST differ from the corners. If it
+    // were equal, the texture does not reflect the shader's geometry
+    // (e.g. the whole frame is clear, or the fragment gets no real uv).
+    let center = samples[4].1;
     assert_ne!(
-        centro, tl,
-        "el centro es idéntico a las esquinas: el render no refleja \
-         la onda del shader (¿uniforms o uv sin conectar?)"
+        center, tl,
+        "the center is identical to the corners: the render does not \
+         reflect the shader's wave (uniforms or uv unwired?)"
     );
 }
 
-/// Dispositivo wgpu offline (sin superficie): mismo criterio de
-/// adaptador que GpuContext pero sin `compatible_surface`. `None` si no
-/// hay adaptador (CI sin GPU) — el test se salta en vez de fallar.
+/// Offline wgpu device (no surface): same adapter criterion as GpuContext
+/// but without `compatible_surface`. `None` if there is no adapter
+/// (GPU-less CI) — the test skips instead of failing.
 fn offline_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
@@ -239,8 +235,8 @@ fn offline_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     Some((device, queue))
 }
 
-/// Uniform block (48 bytes) y bind group con la MISMA forma que el
-/// renderer animado: time, params0, mouse, params, res, pad.
+/// Uniform block (48 bytes) and bind group with the SAME shape as the
+/// animated renderer: time, params0, mouse, params, res, pad.
 fn make_uniforms(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -275,7 +271,7 @@ fn make_uniforms(
     queue.write_buffer(
         &buf,
         0,
-        // SAFETY: repr(C) de f32 puros, 48 bytes verificados en compile-time.
+        // SAFETY: repr(C) of plain f32s, 48 bytes verified at compile time.
         unsafe { std::slice::from_raw_parts(&block as *const U as *const u8, 48) },
     );
 

@@ -1,22 +1,23 @@
-//! Rastreo de ventanas fullscreen vía `wlr-foreign-toplevel-management`
-//! (Fase 5: pausa de la animación donde no se ve el fondo).
+//! Fullscreen window tracking via `wlr-foreign-toplevel-management`
+//! (Phase 5: pausing the animation where the wallpaper is not visible).
 //!
-//! Contrato: el compositor anuncia cada ventana como un "toplevel" con
-//! sus estados (maximized/fullscreen/activated...) y las salidas sobre
-//! las que está (`output_enter`/`output_leave`). Con eso, esta unidad
-//! responde UNA pregunta: **¿hay una ventana fullscreen en esta salida?**
+//! Contract: the compositor announces each window as a "toplevel" with its
+//! states (maximized/fullscreen/activated...) and the outputs it sits on
+//! (`output_enter`/`output_leave`). With that, this unit answers ONE
+//! question: **is there a fullscreen window on this output?**
 //!
-//! Política (D12): solo `fullscreen` pausa — el fullscreen cubre el
-//! fondo por definición. `maximized` NO cuenta: en varios compositors
-//! maximizar no cubre todo el buffer del fondo y el wallpaper seguiría
-//! asomando; pausarlo ahí sería pausar algo visible.
+//! Policy (D12): only `fullscreen` pauses — fullscreen covers the
+//! wallpaper by definition. `maximized` does NOT count: on several
+//! compositors maximizing does not cover the whole wallpaper buffer and
+//! the background would still peek through; pausing there would pause
+//! something visible.
 //!
-//! La pausa es **por salida**: una ventana fullscreen en eDP-1 congela
-//! el wallpaper de eDP-1; HDMI-A-1 sigue animando.
+//! The pause is **per output**: a fullscreen window on eDP-1 freezes
+//! eDP-1's wallpaper; HDMI-A-1 keeps animating.
 //!
-//! Los impls `Dispatch` viven en `BackgroundState` (wayland-client
-//! exige que el estado dueño de la cola los implemente); este módulo
-//! aporta solo el modelo de datos y la semántica.
+//! The `Dispatch` impls live in `BackgroundState` (wayland-client requires
+//! the queue-owning state to implement them); this module only provides
+//! the data model and semantics.
 
 use std::collections::HashMap;
 
@@ -24,47 +25,47 @@ use crate::wayland_client::Proxy;
 use crate::wayland_client::protocol::wl_output::WlOutput;
 use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1;
 
-/// Valor del enum `state` del protocolo para "fullscreen".
+/// Value of the protocol's `state` enum for "fullscreen".
 pub(crate) const STATE_FULLSCREEN: u32 = 3;
 
-/// Estado de una ventana rastreada.
+/// State of a tracked window.
 #[derive(Default)]
 struct ToplevelData {
-    /// Título (evento `title`), solo para diagnóstico.
+    /// Title (`title` event), diagnostics only.
     title: String,
-    /// ¿Está en fullscreen (según el último evento `state`)?
+    /// Is it fullscreen (per the last `state` event)?
     fullscreen: bool,
-    /// Salidas sobre las que está (output_enter/output_leave), por id.
+    /// Outputs it sits on (output_enter/output_leave), by id.
     outputs: Vec<crate::wayland_client::backend::ObjectId>,
 }
 
-/// Rastreo de toplevels: modelo de datos puro. Sin protocolo ligado,
-/// `disabled()` ofrece el mismo tipo con el mapa vacío — la pausa es
-/// simplemente "nunca" y el resto del motor no comprueba nada.
+/// Toplevel tracking: pure data model. With no protocol bound,
+/// `disabled()` offers the same type with an empty map — the pause is
+/// simply "never" and the rest of the engine checks nothing.
 pub struct ToplevelTracker {
     toplevels: HashMap<ZwlrForeignToplevelHandleV1, ToplevelData>,
 }
 
 impl ToplevelTracker {
-    /// Tracker sin protocolo: nunca hay fullscreen (degradación D12).
+    /// Tracker without the protocol: never fullscreen (D12 degradation).
     pub fn disabled() -> Self {
         Self {
             toplevels: HashMap::new(),
         }
     }
 
-    /// Registra una ventana nueva (evento `toplevel` del manager).
+    /// Registers a new window (the manager's `toplevel` event).
     pub fn toplevel_created(&mut self, handle: ZwlrForeignToplevelHandleV1) {
         self.toplevels.insert(handle, ToplevelData::default());
     }
 
-    /// El compositor retira el soporte del protocolo (`finished`).
+    /// The compositor withdrew protocol support (`finished`).
     pub fn reset(&mut self) {
         self.toplevels.clear();
     }
 
-    /// Actualiza los estados de una ventana (evento `state`). El array
-    /// del protocolo es una lista de u32 crudos (enum `state`).
+    /// Updates a window's states (`state` event). The protocol's array is
+    /// a list of raw u32s (`state` enum).
     pub fn toplevel_state(&mut self, handle: &ZwlrForeignToplevelHandleV1, states: &[u8]) {
         let Some(data) = self.toplevels.get_mut(handle) else {
             return;
@@ -79,7 +80,7 @@ impl ToplevelTracker {
         }
         if fullscreen != data.fullscreen {
             log::info!(
-                "toplevel '{}' fullscreen={} (estados: {:?})",
+                "toplevel '{}' fullscreen={} (states: {:?})",
                 data.title,
                 fullscreen,
                 states
@@ -93,7 +94,7 @@ impl ToplevelTracker {
         data.fullscreen = fullscreen;
     }
 
-    /// La ventana entra en una salida (evento `output_enter`).
+    /// The window enters an output (`output_enter` event).
     pub fn output_enter(&mut self, handle: &ZwlrForeignToplevelHandleV1, output: &WlOutput) {
         let Some(data) = self.toplevels.get_mut(handle) else {
             return;
@@ -110,7 +111,7 @@ impl ToplevelTracker {
         }
     }
 
-    /// La ventana sale de una salida (evento `output_leave`).
+    /// The window leaves an output (`output_leave` event).
     pub fn output_leave(&mut self, handle: &ZwlrForeignToplevelHandleV1, output: &WlOutput) {
         let Some(data) = self.toplevels.get_mut(handle) else {
             return;
@@ -119,19 +120,19 @@ impl ToplevelTracker {
         data.outputs.retain(|x| *x != id);
     }
 
-    /// La ventana se cerró (evento `closed`).
+    /// The window closed (`closed` event).
     pub fn toplevel_closed(&mut self, handle: &ZwlrForeignToplevelHandleV1) {
         self.toplevels.remove(handle);
     }
 
-    /// Título de la ventana (evento `title`), para diagnóstico.
+    /// Window title (`title` event), for diagnostics.
     pub fn toplevel_title(&mut self, handle: &ZwlrForeignToplevelHandleV1, title: String) {
         if let Some(data) = self.toplevels.get_mut(handle) {
             data.title = title;
         }
     }
 
-    /// ¿Hay alguna ventana fullscreen en la salida indicada?
+    /// Is there any fullscreen window on the given output?
     pub fn is_fullscreen_on(&self, output: &WlOutput) -> bool {
         let id = output.id();
         self.toplevels

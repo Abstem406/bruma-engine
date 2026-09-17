@@ -1,21 +1,21 @@
-//! Empaquetado (`pack`), carga, validación e instalación de paquetes
-//! `.wallpaper`.
+//! Packing (`pack`), loading, validation and installation of `.wallpaper`
+//! packages.
 //!
-//! Seguridad (los tres ataques clásicos de ZIP, todos cubiertos):
+//! Security (the three classic ZIP attacks, all covered):
 //!
-//! 1. **Path traversal** (`../../.bashrc`): cada entrada se valida con
-//!    [`zip::read::ZipFile::enclosed_name`]; solo rutas que quedan dentro
-//!    del directorio destino se extraen (además del rechazo temprano del
-//!    manifiesto para `entry`/`preview`).
-//! 2. **Symlinks** (escape con enlaces): cualquier entrada symlink
-//!    rechaza el paquete entero (los wallpapers no los necesitan).
-//! 3. **Zip bombs** (descompresión desproporcionada): límites duros por
-//!    archivo (usando el tamaño declarado ANTES de leer) y por total
-//!    descomprimido, más un tope de número de entradas.
+//! 1. **Path traversal** (`../../.bashrc`): every entry is validated with
+//!    [`zip::read::ZipFile::enclosed_name`]; only paths that stay inside
+//!    the destination directory get extracted (plus the manifest's early
+//!    rejection for `entry`/`preview`).
+//! 2. **Symlinks** (escape via links): any symlink entry rejects the whole
+//!    package (wallpapers don't need them).
+//! 3. **Zip bombs** (disproportionate decompression): hard limits per
+//!    file (using the declared size BEFORE reading) and for the total
+//!    decompressed size, plus a cap on the number of entries.
 //!
-//! La instalación copia el paquete a un directorio versionado
-//! (`<install_dir>/<nombre>/<versión-semver>/`) para que instalar una
-//! versión nueva no destruya la anterior.
+//! Installation copies the package into a versioned directory
+//! (`<install_dir>/<name>/<semver-version>/`) so installing a new version
+//! never destroys the previous one.
 
 use std::fs;
 use std::io::Read;
@@ -27,37 +27,38 @@ use zip::{CompressionMethod, ZipArchive};
 use crate::error::PackError;
 use crate::manifest::Manifest;
 
-/// Límites de seguridad. Un wallpaper es texto + un preview: con esto
-/// sobra. (FUTURO: el manifiesto v2 podrá declarar assets grandes.)
+/// Security limits. A wallpaper is text + a preview: this is plenty.
+/// (FUTURE: manifest v2 may declare large assets.)
 pub const MAX_FILES: usize = 256;
 pub const MAX_FILE_SIZE: u64 = 32 * 1024 * 1024;
 pub const MAX_TOTAL_SIZE: u64 = 96 * 1024 * 1024;
 
-/// Límite del paquete comprimido en memoria (protección doble: incluso
-/// si el ZIP declara tamaños falsos, el lector nunca ve más que esto).
+/// Cap for the compressed package held in memory (double protection: even
+/// if the ZIP lies about sizes, the reader never sees more than this).
 const MAX_ZIP_INPUT: u64 = 256 * 1024 * 1024;
 
-/// Directorio donde se instalan los paquetes. Se pasa explícito para que
-/// el crate no decida nada del sistema (frontera D6); la CLI resuelve
-/// `XDG_DATA_HOME/bruma/wallpapers` y lo crea si falta.
+/// Directory where packages are installed. Passed explicitly so the crate
+/// decides nothing about the system (D6 boundary); the CLI resolves
+/// `XDG_DATA_HOME/bruma/wallpapers` and creates it if missing.
 #[derive(Debug, Clone)]
 pub struct Store {
     root: PathBuf,
 }
 
 impl Store {
-    /// Store sobre `root`. No lo crea: [`Store::install`] lo hace perezoso.
+    /// Store over `root`. Does not create it: [`Store::install`] does so
+    /// lazily.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Store { root: root.into() }
     }
 
-    /// Raíz del store.
+    /// Store root.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Lista los paquetes instalados (una entrada por versión). Sin
-    /// recorrer el árbol entero: `root/<paquete>/<versión>/`.
+    /// Lists installed packages (one entry per version). No full-tree
+    /// walk: `root/<package>/<version>/`.
     pub fn installed(&self) -> Vec<(String, String, PathBuf)> {
         let mut out = Vec::new();
         let Ok(pkgs) = fs::read_dir(&self.root) else {
@@ -85,18 +86,18 @@ impl Store {
         out
     }
 
-    /// Ruta de instalación de un paquete con nombre y versión dados.
+    /// Install path of a package with the given name and version.
     pub fn installed_path(&self, name: &str, version: &str) -> PathBuf {
         self.root.join(name).join(version)
     }
 
-    /// Empaqueta un directorio (con `wallpaper.json` dentro) en un
-    /// archivo `.wallpaper`. La salida es `<título-slug>.wallpaper` en
-    /// `out_dir` si `out` es `None`.
+    /// Packs a directory (containing `wallpaper.json`) into a `.wallpaper`
+    /// file. Output is `<title-slug>.wallpaper` in `out_dir` when `out`
+    /// is `None`.
     pub fn pack(dir: &Path, out: Option<&Path>) -> Result<PathBuf, PackError> {
         let manifest_path = dir.join("wallpaper.json");
         let json = fs::read_to_string(&manifest_path).map_err(|_| {
-            PackError::Missing("wallpaper.json (en el directorio a empaquetar)".to_owned())
+            PackError::Missing("wallpaper.json (in the directory to pack)".to_owned())
         })?;
         let manifest = Manifest::parse(&json)?;
 
@@ -109,8 +110,8 @@ impl Store {
 
         let file = fs::File::create(&out_path)?;
         let mut zip = zip::ZipWriter::new(file);
-        // Los wallpapers son texto: compresión máxima razonable y
-        // permisos normales de archivo (nunca ejecutables).
+        // Wallpapers are text: sensible maximum compression and normal
+        // file permissions (never executable).
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .unix_permissions(0o644);
@@ -129,9 +130,9 @@ impl Store {
         add_file("wallpaper.json")?;
         add_file(&manifest.entry)?;
         add_file(&manifest.preview)?;
-        // Assets extra declarados por el creador: cualquier `assets/`
-        // presente en el directorio se incluye (validado igual que el
-        // resto al validar/instalar).
+        // Extra assets declared by the creator: any `assets/` present in
+        // the directory is included (validated like everything else on
+        // validate/install).
         let assets = dir.join("assets");
         if assets.is_dir() {
             let mut entries: Vec<_> = fs::read_dir(&assets)?
@@ -153,9 +154,9 @@ impl Store {
         Ok(out_path)
     }
 
-    /// Lee y valida el manifiesto de un ZIP en memoria. Recorre además
-    /// TODAS las entradas aplicando las reglas de seguridad (symlinks,
-    /// tamaños, rutas): `validate` es tan estricto como `install`.
+    /// Reads and validates the manifest of a ZIP in memory. Also walks
+    /// ALL entries applying the security rules (symlinks, sizes, paths):
+    /// `validate` is as strict as `install`.
     pub fn load_manifest(bytes: &[u8]) -> Result<Manifest, PackError> {
         let mut archive = open_archive(bytes)?;
         let json = read_entry_string(&mut archive, "wallpaper.json")?;
@@ -165,21 +166,21 @@ impl Store {
         Ok(manifest)
     }
 
-    /// Valida un paquete completo (el paso de `bruma validate`).
+    /// Validates a whole package (the `bruma validate` step).
     ///
-    /// Devuelve el manifiesto validado y la ruta del entry como está
-    /// dentro del ZIP (para diagnósticos).
+    /// Returns the validated manifest and the entry's path as it lives
+    /// inside the ZIP (for diagnostics).
     pub fn validate(bytes: &[u8]) -> Result<Manifest, PackError> {
         Self::load_manifest(bytes)
     }
 
-    /// Instala el paquete en el store.
+    /// Installs the package into the store.
     ///
-    /// La extracción se hace a un directorio de staging y se renombra al
-    /// final: si el paquete es inválido o la extracción falla a medias,
-    /// no queda basura parcial en el store. No sobrescribe: si la
-    /// versión ya está instalada, devuelve la ruta existente
-    /// (`installed: false`), como buena costumbre de gestores.
+    /// Extraction goes to a staging directory renamed at the end: if the
+    /// package is invalid or extraction fails halfway, no partial garbage
+    /// is left in the store. Never overwrites: if the version is already
+    /// installed, returns the existing path (`installed: false`), as good
+    /// package managers do.
     pub fn install(
         &self,
         bytes: &[u8],
@@ -190,8 +191,8 @@ impl Store {
         let json = read_entry_string(&mut archive, "wallpaper.json")?;
         let manifest = Manifest::parse(&json)?;
         check_entry_and_preview(&mut archive, &manifest)?;
-        // Segunda pasada completa (defensa en profundidad) ANTES de
-        // escribir nada: symlinks, tamaños y rutas.
+        // Full second pass (defense in depth) BEFORE writing anything:
+        // symlinks, sizes and paths.
         scan_archive(&mut archive)?;
 
         let dest_root = self.installed_path(name, version);
@@ -213,7 +214,7 @@ impl Store {
         let extracted = extract_all(&mut archive, &staging);
         match extracted {
             Ok(()) => {
-                // Carrera benigna: otra instalación pudo ganar mientras.
+                // Benign race: another install may have won meanwhile.
                 if dest_root.join("wallpaper.json").is_file() {
                     let _ = fs::remove_dir_all(&staging);
                     return Ok((dest_root, false));
@@ -229,8 +230,8 @@ impl Store {
     }
 }
 
-/// Abre un ZIP desde memoria, con límites. `Cursor` es `Read + Seek` y
-/// el `ZipArchive` lo posee.
+/// Opens a ZIP from memory, with limits. `Cursor` is `Read + Seek` and the
+/// `ZipArchive` owns it.
 fn open_archive(bytes: &[u8]) -> Result<ZipArchive<std::io::Cursor<&[u8]>>, PackError> {
     if bytes.len() as u64 > MAX_ZIP_INPUT {
         return Err(PackError::TotalTooBig(MAX_ZIP_INPUT));
@@ -243,8 +244,8 @@ fn open_archive(bytes: &[u8]) -> Result<ZipArchive<std::io::Cursor<&[u8]>>, Pack
     Ok(archive)
 }
 
-/// Lee una entrada de texto del ZIP con validaciones: sin symlinks y con
-/// límite de tamaño ANTES de materializarla.
+/// Reads a text entry from the ZIP with checks: no symlinks and a size
+/// limit BEFORE materializing it.
 fn read_entry_string(
     archive: &mut ZipArchive<std::io::Cursor<&[u8]>>,
     name: &str,
@@ -264,9 +265,9 @@ fn read_entry_string(
     Ok(s)
 }
 
-/// Recorre TODAS las entradas aplicando las reglas de seguridad:
-/// symlinks prohibidos, tamaño máximo por archivo, rutas contenidas y
-/// total descomprimido bajo el límite (anti zip bomb).
+/// Walks ALL entries applying the security rules: symlinks forbidden,
+/// per-file size cap, contained paths and decompressed total under the
+/// limit (anti zip bomb).
 fn scan_archive(archive: &mut ZipArchive<std::io::Cursor<&[u8]>>) -> Result<(), PackError> {
     let mut total: u64 = 0;
     for i in 0..archive.len() {
@@ -289,8 +290,8 @@ fn scan_archive(archive: &mut ZipArchive<std::io::Cursor<&[u8]>>) -> Result<(), 
     Ok(())
 }
 
-/// Extrae todas las entradas a `dest` (ya validadas por
-/// [`scan_archive`]; las comprobaciones aquí son de cinturón y tirantes).
+/// Extracts all entries to `dest` (already validated by [`scan_archive`];
+/// the checks here are belt and braces).
 fn extract_all(
     archive: &mut ZipArchive<std::io::Cursor<&[u8]>>,
     dest: &Path,
@@ -315,8 +316,8 @@ fn extract_all(
     Ok(())
 }
 
-/// Comprueba que `entry` y `preview` del manifiesto existen dentro del
-/// paquete y que ninguna entrada del ZIP es symlink.
+/// Checks that the manifest's `entry` and `preview` exist inside the
+/// package and that no ZIP entry is a symlink.
 fn check_entry_and_preview(
     archive: &mut ZipArchive<std::io::Cursor<&[u8]>>,
     manifest: &Manifest,
@@ -346,14 +347,14 @@ mod tests {
     const MANIFEST: &str = r#"{
         "format": 1,
         "type": "shader",
-        "title": "Prueba",
+        "title": "Test",
         "entry": "main.wgsl",
         "preview": "preview.png",
         "permissions": [],
         "min_engine": "0.1.0"
     }"#;
 
-    /// Construye un `.wallpaper` en memoria.
+    /// Builds a `.wallpaper` in memory.
     fn zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut buf = std::io::Cursor::new(Vec::new());
         {
@@ -384,15 +385,15 @@ mod tests {
     }
 
     #[test]
-    fn manifiesto_de_paquete_bien_formado() {
+    fn well_formed_package_manifest() {
         let bytes = zip_bytes(&bytes_of(&good_entries()));
         let m = Store::load_manifest(&bytes).unwrap();
-        assert_eq!(m.title, "Prueba");
+        assert_eq!(m.title, "Test");
         assert_eq!(m.format, SCHEMA_VERSION);
     }
 
     #[test]
-    fn falta_el_entry() {
+    fn missing_entry() {
         let entries: Vec<(&str, Vec<u8>)> = good_entries()
             .into_iter()
             .filter(|(n, _)| *n != "main.wgsl")
@@ -403,10 +404,10 @@ mod tests {
     }
 
     #[test]
-    fn symlink_rechazado() {
+    fn symlink_rejected() {
         let mut bytes = zip_bytes(&bytes_of(&good_entries()));
-        // Añadimos un symlink reescribiendo el zip con uno dentro
-        // (add_symlink del crate).
+        // Add a symlink by rewriting the zip with one inside (crate's
+        // add_symlink).
         let mut buf = std::io::Cursor::new(bytes.clone());
         {
             let mut r = zip::ZipArchive::new(&mut buf).unwrap();
@@ -421,7 +422,7 @@ mod tests {
                 }
                 w.add_symlink(
                     "evil",
-                    "/home/usuario/.bashrc",
+                    "/home/user/.bashrc",
                     zip::write::SimpleFileOptions::default(),
                 )
                 .unwrap();
@@ -431,18 +432,18 @@ mod tests {
         }
         let err = Store::load_manifest(&bytes).unwrap_err().to_string();
         assert!(err.contains("symlink"), "{err}");
-        // Y también al instalar.
+        // And when installing too.
         let (store, dir) = temp_store("symlink");
         let err = store
-            .install(&bytes, "prueba", "0.1.0")
+            .install(&bytes, "test", "0.1.0")
             .unwrap_err()
             .to_string();
         assert!(err.contains("symlink"), "{err}");
-        assert!(!dir.join("prueba").exists());
+        assert!(!dir.join("test").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Directorio temporal único por test (los tests corren en paralelo).
+    /// Unique temp dir per test (tests run in parallel).
     fn temp_store(tag: &str) -> (Store, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "bruma-test-{}-{}-{tag}",
@@ -454,61 +455,61 @@ mod tests {
     }
 
     #[test]
-    fn path_traversal_rechazado_al_instalar() {
+    fn path_traversal_rejected_on_install() {
         let mut entries = good_entries();
         entries.push(("../../escape.sh", b"echo pwned".to_vec()));
         let bytes = zip_bytes(&bytes_of(&entries));
         let (store, dir) = temp_store("traversal");
         let err = store
-            .install(&bytes, "prueba", "0.1.0")
+            .install(&bytes, "test", "0.1.0")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("insegura"), "{err}");
-        // Nada queda escrito (ni staging): la validación es previa.
-        assert!(!dir.join("prueba").exists(), "quedó basura en {:?}", dir);
+        assert!(err.contains("unsafe"), "{err}");
+        // Nothing was written (not even staging): validation comes first.
+        assert!(!dir.join("test").exists(), "garbage left in {:?}", dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn install_y_listado_y_no_sobrescribe() {
+    fn install_list_and_no_overwrite() {
         let bytes = zip_bytes(&bytes_of(&good_entries()));
         let (store, dir) = temp_store("install");
-        let (path, installed) = store.install(&bytes, "prueba", "0.1.0").unwrap();
+        let (path, installed) = store.install(&bytes, "test", "0.1.0").unwrap();
         assert!(installed);
         assert!(path.join("wallpaper.json").is_file());
         assert!(path.join("main.wgsl").is_file());
 
-        let (_, installed_again) = store.install(&bytes, "prueba", "0.1.0").unwrap();
-        assert!(!installed_again, "no debe sobrescribir");
+        let (_, installed_again) = store.install(&bytes, "test", "0.1.0").unwrap();
+        assert!(!installed_again, "must not overwrite");
 
         let list = store.installed();
         assert_eq!(list.len(), 1);
-        assert_eq!(list[0].0, "prueba");
+        assert_eq!(list[0].0, "test");
         assert_eq!(list[0].1, "0.1.0");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn zip_bomb_rechazada() {
-        // Entrada que declara tamaño enorme: el límite se aplica ANTES de
-        // materializar nada (escaneo del central directory).
+    fn zip_bomb_rejected() {
+        // Entry declaring a huge size: the limit applies BEFORE
+        // materializing anything (central directory scan).
         let mut entries = good_entries();
         entries.push(("assets/huge.bin", vec![0u8; 40 * 1024 * 1024]));
         let bytes = zip_bytes(&bytes_of(&entries));
         let err = Store::load_manifest(&bytes).unwrap_err().to_string();
-        assert!(err.contains("demasiado grande"), "{err}");
+        assert!(err.contains("too large"), "{err}");
         let (store, dir) = temp_store("bomb");
         let err = store
-            .install(&bytes, "prueba", "0.1.0")
+            .install(&bytes, "test", "0.1.0")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("demasiado grande"), "{err}");
-        assert!(!dir.join("prueba").exists());
+        assert!(err.contains("too large"), "{err}");
+        assert!(!dir.join("test").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn pack_crea_zip_valido() {
+    fn pack_creates_valid_zip() {
         let dir = std::env::temp_dir().join(format!(
             "bruma-pack-{}-{}",
             std::process::id(),
@@ -523,7 +524,7 @@ mod tests {
         assert!(out.is_file(), "{out:?}");
         let bytes = std::fs::read(&out).unwrap();
         let m = Store::load_manifest(&bytes).unwrap();
-        assert_eq!(m.title, "Prueba");
+        assert_eq!(m.title, "Test");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

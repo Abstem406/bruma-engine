@@ -1,24 +1,23 @@
-//! Pausa global del motor (criterio D12, parte 2): bloqueo de sesión y
-//! batería.
+//! Global engine pause (D12, part 2): session lock and battery.
 //!
-//! Fuentes de señal, ambas por D-Bus de **sistema**:
+//! Signal sources, both over the **system** D-Bus:
 //!
-//! - **logind** (`org.freedesktop.login1.Session`): las señales `Lock`/
-//!   `Unlock` que el compositor emite al bloquear (niri las dispara vía
-//!   session-lock), más la propiedad `LockedHint` (`PropertiesChanged`)
-//!   como segunda fuente por si el lock manager solo fija el hint.
-//! - **UPower** (`org.freedesktop.UPower.Device` en `DisplayDevice`):
-//!   propiedad `State` — `2` (discharging) significa "en batería".
+//! - **logind** (`org.freedesktop.login1.Session`): the `Lock`/`Unlock`
+//!   signals the compositor emits on lock (niri fires them via
+//!   session-lock), plus the `LockedHint` property (`PropertiesChanged`)
+//!   as a second source in case the lock manager only sets the hint.
+//! - **UPower** (`org.freedesktop.UPower.Device` on `DisplayDevice`):
+//!   the `State` property — `2` (discharging) means "on battery".
 //!
-//! Contrato idéntico al de las notificaciones (D11): **best-effort**.
-//! Sin bus, sin sesión o con daemon sordo, el watcher degrada a "nunca
-//! pausa por esa fuente" y el motor no cambia en nada. `disabled()`
-//! existe para tests: ninguna prueba toca el bus real.
+//! Contract identical to notifications (D11): **best-effort**. Without a
+//! bus, a session, or with a deaf daemon, the watcher degrades to "never
+//! pauses from that source" and the engine changes nothing. `disabled()`
+//! exists for tests: no test touches the real bus.
 //!
-//! El modelo de despacho: el bucle de frames llama a [`poll`] una vez
-//! por frame; cada llamada drena (sin bloquear) las señales D-Bus que
-//! llegaron, y los callbacks actualizan los flags. Cero hilos extra:
-//! el watcher vive en el mismo hilo que Wayland.
+//! The dispatch model: the frame loop calls [`poll`] once per frame; each
+//! call drains (without blocking) the D-Bus signals that arrived, and the
+//! callbacks update the flags. Zero extra threads: the watcher lives on
+//! the same thread as Wayland.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -27,84 +26,84 @@ use dbus::arg::{PropMap, Variant, cast};
 use dbus::blocking::SyncConnection;
 use dbus::message::MatchRule;
 
-/// UPower `Device.State`: descargando (en batería).
+/// UPower `Device.State`: discharging (on battery).
 const UPOWER_STATE_DISCHARGING: u32 = 2;
 
-/// Timeout para los method calls de estado inicial (uno solo, al arranque).
+/// Timeout for the initial state method calls (a single one, at startup).
 const INIT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Causas de pausa global, combinables. La pausa activa si hay ALGUNA.
+/// Global pause causes, combinable. Paused if there is ANY.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PauseFlags {
-    /// Sesión bloqueada (logind `Lock`/`Unlock`/`LockedHint`).
+    /// Session locked (logind `Lock`/`Unlock`/`LockedHint`).
     pub session_locked: bool,
-    /// En batería (UPower `State == 2`).
+    /// On battery (UPower `State == 2`).
     pub on_battery: bool,
 }
 
 impl PauseFlags {
-    /// ¿Hay que pausar el motor?
+    /// Should the engine pause?
     pub fn any(&self) -> bool {
         self.session_locked || self.on_battery
     }
 }
 
-/// ¿Está el motor en pausa global según los flags actuales?
-pub(crate) fn flags_a_pausa(flags: &PauseFlags) -> bool {
+/// Is the engine globally paused according to the current flags?
+pub(crate) fn flags_to_pause(flags: &PauseFlags) -> bool {
     flags.any()
 }
 
-/// ¿Corresponde "en batería" según el `State` de UPower?
-fn upower_state_a_bateria(state: u32) -> bool {
+/// Does UPower's `State` mean "on battery"?
+fn upower_state_to_battery(state: u32) -> bool {
     state == UPOWER_STATE_DISCHARGING
 }
 
-/// Extrae un bool de un `Variant` D-Bus (lo que llega en
-/// `PropertiesChanged`). Función pura: el path de extracción exacto que
-/// usan los callbacks, testeado sin bus.
-fn bool_de_variant(v: &Variant<Box<dyn dbus::arg::RefArg>>) -> Option<bool> {
+/// Extracts a bool from a D-Bus `Variant` (what arrives in
+/// `PropertiesChanged`). Pure function: the exact extraction path the
+/// callbacks use, tested without a bus.
+fn bool_from_variant(v: &Variant<Box<dyn dbus::arg::RefArg>>) -> Option<bool> {
     cast::<bool>(&*v.0).copied()
 }
 
-/// Extrae un u32 de un `Variant` D-Bus.
-fn u32_de_variant(v: &Variant<Box<dyn dbus::arg::RefArg>>) -> Option<u32> {
+/// Extracts a u32 from a D-Bus `Variant`.
+fn u32_from_variant(v: &Variant<Box<dyn dbus::arg::RefArg>>) -> Option<u32> {
     cast::<u32>(&*v.0).copied()
 }
 
-/// Extrae un String de un `Variant` D-Bus.
-fn string_de_variant(v: &Variant<Box<dyn dbus::arg::RefArg>>) -> Option<String> {
+/// Extracts a String from a D-Bus `Variant`.
+fn string_from_variant(v: &Variant<Box<dyn dbus::arg::RefArg>>) -> Option<String> {
     cast::<String>(&*v.0).cloned()
 }
 
-/// Watcher de pausa global: bloqueo de sesión y batería, best-effort.
+/// Global pause watcher: session lock and battery, best-effort.
 ///
-/// - `Some(conn)`: conexión al bus de sistema con los matches activos.
-/// - `None`: sin bus (o sin sesión); `paused()` es siempre `false` y
-///   `poll()` no hace nada. El resto del motor no comprueba nada.
+/// - `Some(conn)`: system bus connection with the matches active.
+/// - `None`: no bus (or no session); `paused()` is always `false` and
+///   `poll()` does nothing. The rest of the engine checks nothing.
 pub struct SessionPauseWatcher {
-    /// Flags compartidos con los callbacks D-Bus (el crate los invoca
-    /// desde su propio despacho dentro de `process`).
+    /// Flags shared with the D-Bus callbacks (the crate invokes them from
+    /// its own dispatch inside `process`).
     flags: Arc<Mutex<PauseFlags>>,
     conn: Option<Arc<SyncConnection>>,
 }
 
 impl SessionPauseWatcher {
-    /// Conecta al bus de sistema y subscribe las señales. Nunca falla:
-    /// cualquier error degrada a un watcher que no pausa.
+    /// Connects to the system bus and subscribes to signals. Never fails:
+    /// any error degrades to a watcher that never pauses.
     pub fn new() -> Self {
         let conn = match SyncConnection::new_system() {
             Ok(c) => Arc::new(c),
             Err(e) => {
-                log::info!("sin bus de sistema: pausa por bloqueo/batería no disponible ({e})");
+                log::info!("no system bus: lock/battery pause unavailable ({e})");
                 return Self::disabled();
             }
         };
 
         let flags = Arc::new(Mutex::new(PauseFlags::default()));
 
-        // Estado inicial sincrónico (las señales solo avisan de CAMBIOS):
-        // así un arranque con la sesión ya bloqueada o ya en batería
-        // pausa desde el primer frame.
+        // Synchronous initial state (signals only announce CHANGES): so a
+        // start with the session already locked, or already on battery,
+        // pauses from the first frame.
         let locked = Self::query_session(&conn, &flags);
         let battery = Self::query_battery(&conn, &flags);
         if let Ok(mut f) = flags.lock() {
@@ -116,8 +115,8 @@ impl SessionPauseWatcher {
             }
         }
 
-        // Señales: solo si el estado inicial se pudo consultar (mismo
-        // objeto de sesión; si logind no respondió, no insiste).
+        // Signals: only if the initial state could be queried (same
+        // session object; if logind didn't answer, it doesn't insist).
         if let Some(session_path) = locked.and_then(|_| Self::session_path(&conn)) {
             Self::subscribe_session(&conn, &flags, &session_path);
         }
@@ -126,16 +125,16 @@ impl SessionPauseWatcher {
         }
 
         log::info!(
-            "pausa global: fuente bloqueo {} (logind), fuente batería {} (UPower)",
+            "global pause: lock source {} (logind), battery source {} (UPower)",
             if locked.is_some() {
-                "disponible"
+                "available"
             } else {
-                "no disponible"
+                "unavailable"
             },
             if battery.is_some() {
-                "disponible"
+                "available"
             } else {
-                "no disponible"
+                "unavailable"
             }
         );
 
@@ -145,7 +144,8 @@ impl SessionPauseWatcher {
         }
     }
 
-    /// Watcher sin bus: nunca pausa (para tests y degradación total).
+    /// Watcher without a bus: never pauses (for tests and total
+    /// degradation).
     pub fn disabled() -> Self {
         Self {
             flags: Arc::new(Mutex::new(PauseFlags::default())),
@@ -153,21 +153,21 @@ impl SessionPauseWatcher {
         }
     }
 
-    /// ¿Hay que pausar el motor ahora mismo?
+    /// Should the engine pause right now?
     pub fn paused(&self) -> bool {
         match self.flags.lock() {
-            Ok(f) => flags_a_pausa(&f),
+            Ok(f) => flags_to_pause(&f),
             Err(_) => false,
         }
     }
 
-    /// Drena (sin bloquear) las señales D-Bus pendientes. Una llamada
-    /// por frame desde el bucle; los callbacks actualizan los flags.
+    /// Drains (without blocking) pending D-Bus signals. One call per
+    /// frame from the loop; the callbacks update the flags.
     pub fn poll(&self) {
         let Some(conn) = &self.conn else { return };
-        // Cota de drenaje: con señales normales (una cada tanto) una
-        // vuelta basta; 32 absorbe ráfagas sin poder girar infinito si
-        // alguien nos inunda el bus.
+        // Drain cap: with normal signals (one now and then) a single pass
+        // suffices; 32 absorbs bursts without being able to spin forever
+        // if someone floods the bus.
         for _ in 0..32 {
             match conn.process(Duration::ZERO) {
                 Ok(true) => continue,
@@ -176,20 +176,20 @@ impl SessionPauseWatcher {
         }
     }
 
-    /// Path del objeto Session de logind de la sesión gráfica donde
-    /// corre el compositor que nos lanzó.
+    /// Object path of the logind Session for the graphical session where
+    /// the compositor that launched us runs.
     ///
-    /// NOTA: `GetSessionByPID` NO sirve — los compositors Wayland corren
-    /// como servicios de usuario (systemd --user), fuera del alcance de
-    /// sesión de logind: responde `NoSessionForPID` para cualquier PID
-    /// (verificado en niri). En su lugar: `ListSessions` y la primera
-    /// sesión con `Type="wayland"`.
+    /// NOTE: `GetSessionByPID` is useless — Wayland compositors run as
+    /// user services (systemd --user), outside logind's session scope: it
+    /// answers `NoSessionForPID` for any PID (verified on niri).
+    /// Instead: `ListSessions` and the first session with
+    /// `Type="wayland"`.
     ///
-    /// El path devuelto viene ESCAPADO por logind (sesión "4" →
-    /// `.../session/_34`): hay que usarlo TAL CUAL — las señales
-    /// `Lock`/`Unlock`/`PropertiesChanged` se emiten por ese path
-    /// escapado, no por el numérico (bug cazado en la demo: el match
-    /// por `/session/4` nunca recibía nada).
+    /// The returned path comes ESCAPED by logind (session "4" →
+    /// `.../session/_34`): it must be used AS IS — the
+    /// `Lock`/`Unlock`/`PropertiesChanged` signals are emitted on that
+    /// escaped path, not the numeric one (bug caught in the demo: the
+    /// match on `/session/4` never received anything).
     fn session_path(conn: &SyncConnection) -> Option<dbus::Path<'static>> {
         let proxy = conn.with_proxy(
             "org.freedesktop.login1",
@@ -208,16 +208,16 @@ impl SessionPauseWatcher {
                 "org.freedesktop.login1.Session",
                 "Type",
             )
-            .and_then(|v| string_de_variant(&v));
+            .and_then(|v| string_from_variant(&v));
             if ty.as_deref() == Some("wayland") {
-                log::info!("sesión gráfica de logind: {path} (Type=wayland)");
+                log::info!("logind graphical session: {path} (Type=wayland)");
                 return Some(path);
             }
         }
         None
     }
 
-    /// `LockedHint` actual de la sesión. `None` = logind no respondió.
+    /// Session's current `LockedHint`. `None` = logind didn't answer.
     fn query_session(conn: &SyncConnection, flags: &Arc<Mutex<PauseFlags>>) -> Option<bool> {
         let path = Self::session_path(conn)?;
         let v = Self::get_property(
@@ -227,18 +227,18 @@ impl SessionPauseWatcher {
             "org.freedesktop.login1.Session",
             "LockedHint",
         )?;
-        let value = bool_de_variant(&v)?;
+        let value = bool_from_variant(&v)?;
         if let Ok(mut f) = flags.lock() {
             f.session_locked = value;
         }
         log::info!(
-            "estado inicial: sesión {} (LockedHint={value})",
-            if value { "bloqueada" } else { "desbloqueada" }
+            "initial state: session {} (LockedHint={value})",
+            if value { "locked" } else { "unlocked" }
         );
         Some(value)
     }
 
-    /// `State` actual de UPower DisplayDevice. `None` = no respondió.
+    /// Current `State` of UPower's DisplayDevice. `None` = no answer.
     fn query_battery(conn: &SyncConnection, flags: &Arc<Mutex<PauseFlags>>) -> Option<bool> {
         const DEV: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
         let v = Self::get_property(
@@ -248,23 +248,23 @@ impl SessionPauseWatcher {
             "org.freedesktop.UPower.Device",
             "State",
         )?;
-        let state = u32_de_variant(&v)?;
-        let on_battery = upower_state_a_bateria(state);
+        let state = u32_from_variant(&v)?;
+        let on_battery = upower_state_to_battery(state);
         if let Ok(mut f) = flags.lock() {
             f.on_battery = on_battery;
         }
         log::info!(
-            "estado inicial: {} (UPower State={state})",
+            "initial state: {} (UPower State={state})",
             if on_battery {
-                "en batería"
+                "on battery"
             } else {
-                "con corriente"
+                "on AC power"
             }
         );
         Some(on_battery)
     }
 
-    /// Get genérico de propiedad D-Bus, devuelto como `Variant` crudo.
+    /// Generic D-Bus property Get, returned as a raw `Variant`.
     fn get_property(
         conn: &SyncConnection,
         dest: &str,
@@ -279,11 +279,11 @@ impl SessionPauseWatcher {
         Some(v)
     }
 
-    /// Subscribe `Lock`, `Unlock` y `PropertiesChanged` (LockedHint) de
-    /// la sesión. Cada match es independiente: si uno falla, el resto
-    /// queda vivo.
+    /// Subscribes to the session's `Lock`, `Unlock` and
+    /// `PropertiesChanged` (LockedHint). Each match is independent: if one
+    /// fails, the rest stay alive.
     fn subscribe_session(conn: &SyncConnection, flags: &Arc<Mutex<PauseFlags>>, path: &str) {
-        // Lock / Unlock: señales vacías; fuente primaria.
+        // Lock / Unlock: empty signals; primary source.
         for (member, value) in [("Lock", true), ("Unlock", false)] {
             let rule = MatchRule::new_signal("org.freedesktop.login1.Session", member)
                 .with_path(path.to_owned());
@@ -293,17 +293,17 @@ impl SessionPauseWatcher {
                     f.session_locked = value;
                 }
                 log::info!(
-                    "pausa global: sesión {}",
-                    if value { "bloqueada" } else { "desbloqueada" }
+                    "global pause: session {}",
+                    if value { "locked" } else { "unlocked" }
                 );
                 true
             }) {
-                log::info!("sin señal {member} de logind: esa fuente de pausa degrada ({e})");
+                log::info!("no logind {member} signal: that pause source degrades ({e})");
             }
         }
 
-        // PropertiesChanged: segunda fuente (LockedHint), por si el lock
-        // manager solo fija el hint sin pedir el Lock a logind.
+        // PropertiesChanged: second source (LockedHint), in case the lock
+        // manager only sets the hint without asking logind for the Lock.
         let rule = MatchRule::new_signal("org.freedesktop.DBus.Properties", "PropertiesChanged")
             .with_path(path.to_owned())
             .with_sender("org.freedesktop.login1");
@@ -314,23 +314,23 @@ impl SessionPauseWatcher {
                 if iface != "org.freedesktop.login1.Session" {
                     return true;
                 }
-                if let Some(b) = props.get("LockedHint").and_then(bool_de_variant) {
+                if let Some(b) = props.get("LockedHint").and_then(bool_from_variant) {
                     if let Ok(mut f) = f.lock() {
                         f.session_locked = b;
                     }
                     log::info!(
-                        "pausa global: sesión {} (LockedHint)",
-                        if b { "bloqueada" } else { "desbloqueada" }
+                        "global pause: session {} (LockedHint)",
+                        if b { "locked" } else { "unlocked" }
                     );
                 }
                 true
             },
         ) {
-            log::info!("sin PropertiesChanged de logind: LockedHint como fuente degrada ({e})");
+            log::info!("no logind PropertiesChanged: LockedHint as a source degrades ({e})");
         }
     }
 
-    /// Subscribe `PropertiesChanged` de UPower (DisplayDevice): `State`.
+    /// Subscribes to UPower's `PropertiesChanged` (DisplayDevice): `State`.
     fn subscribe_battery(conn: &SyncConnection, flags: &Arc<Mutex<PauseFlags>>) {
         let rule = MatchRule::new_signal("org.freedesktop.DBus.Properties", "PropertiesChanged")
             .with_path("/org/freedesktop/UPower/devices/DisplayDevice")
@@ -342,24 +342,24 @@ impl SessionPauseWatcher {
                 if iface != "org.freedesktop.UPower.Device" {
                     return true;
                 }
-                if let Some(state) = props.get("State").and_then(u32_de_variant) {
-                    let on_battery = upower_state_a_bateria(state);
+                if let Some(state) = props.get("State").and_then(u32_from_variant) {
+                    let on_battery = upower_state_to_battery(state);
                     if let Ok(mut f) = f.lock() {
                         f.on_battery = on_battery;
                     }
                     log::info!(
-                        "pausa global: {} (UPower State={state})",
+                        "global pause: {} (UPower State={state})",
                         if on_battery {
-                            "en batería"
+                            "on battery"
                         } else {
-                            "con corriente"
+                            "on AC power"
                         }
                     );
                 }
                 true
             },
         ) {
-            log::info!("sin PropertiesChanged de UPower: pausa por batería degrada ({e})");
+            log::info!("no UPower PropertiesChanged: battery pause degrades ({e})");
         }
     }
 }
@@ -374,12 +374,11 @@ impl Default for SessionPauseWatcher {
 mod tests {
     use super::*;
 
-    // Regla del proyecto (lección D11): los tests jamás tocan el bus
-    // real. Todo el camino con efectos se prueba vía `disabled()` y
-    // funciones puras.
+    // Project rule (D11 lesson): tests never touch the real bus. The whole
+    // effectful path is tested via `disabled()` and pure functions.
 
     #[test]
-    fn semantica_de_flags() {
+    fn flags_semantics() {
         assert!(!PauseFlags::default().any());
         assert!(
             PauseFlags {
@@ -402,46 +401,46 @@ mod tests {
             }
             .any()
         );
-        assert!(flags_a_pausa(&PauseFlags {
+        assert!(flags_to_pause(&PauseFlags {
             session_locked: false,
             on_battery: true
         }));
-        assert!(!flags_a_pausa(&PauseFlags::default()));
+        assert!(!flags_to_pause(&PauseFlags::default()));
     }
 
     #[test]
-    fn upower_state_2_es_bateria() {
-        assert!(upower_state_a_bateria(2)); // discharging
-        assert!(!upower_state_a_bateria(1)); // charging
-        assert!(!upower_state_a_bateria(4)); // fully charged
-        assert!(!upower_state_a_bateria(0)); // unknown
+    fn upower_state_2_is_battery() {
+        assert!(upower_state_to_battery(2)); // discharging
+        assert!(!upower_state_to_battery(1)); // charging
+        assert!(!upower_state_to_battery(4)); // fully charged
+        assert!(!upower_state_to_battery(0)); // unknown
     }
 
     #[test]
-    fn extraccion_de_variantes_dbus() {
-        // El envoltorio exacto que llega en PropertiesChanged:
-        // Variant(Box<dyn RefArg>) con bool/u32 dentro.
+    fn dbus_variant_extraction() {
+        // The exact wrapper arriving in PropertiesChanged:
+        // Variant(Box<dyn RefArg>) with bool/u32 inside.
         let b: Variant<Box<dyn dbus::arg::RefArg>> = Variant(Box::new(true));
-        assert_eq!(bool_de_variant(&b), Some(true));
+        assert_eq!(bool_from_variant(&b), Some(true));
         let b2: Variant<Box<dyn dbus::arg::RefArg>> = Variant(Box::new(false));
-        assert_eq!(bool_de_variant(&b2), Some(false));
+        assert_eq!(bool_from_variant(&b2), Some(false));
 
         let u: Variant<Box<dyn dbus::arg::RefArg>> = Variant(Box::new(2u32));
-        assert_eq!(u32_de_variant(&u), Some(2));
+        assert_eq!(u32_from_variant(&u), Some(2));
 
-        // Tipo equivocado → None (degradación, no panic).
-        assert_eq!(bool_de_variant(&u), None);
+        // Wrong type → None (degradation, not panic).
+        assert_eq!(bool_from_variant(&u), None);
         let s: Variant<Box<dyn dbus::arg::RefArg>> = Variant(Box::new("no".to_owned()));
-        assert_eq!(u32_de_variant(&s), None);
-        assert_eq!(string_de_variant(&s), Some("no".to_owned()));
-        assert_eq!(string_de_variant(&u), None);
+        assert_eq!(u32_from_variant(&s), None);
+        assert_eq!(string_from_variant(&s), Some("no".to_owned()));
+        assert_eq!(string_from_variant(&u), None);
     }
 
     #[test]
-    fn watcher_disabled_nunca_pausa() {
+    fn disabled_watcher_never_pauses() {
         let w = SessionPauseWatcher::disabled();
         assert!(!w.paused());
-        w.poll(); // no-op, sin panic
+        w.poll(); // no-op, no panic
         assert!(!w.paused());
     }
 }

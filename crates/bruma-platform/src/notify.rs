@@ -1,13 +1,13 @@
-//! Notificaciones de escritorio best-effort vía D-Bus
+//! Best-effort desktop notifications via D-Bus
 //! (`org.freedesktop.Notifications`: mako, dunst, quickshell/DMS...).
 //!
-//! El contrato es deliberadamente tímido: un wallpaper nunca debe fallar
-//! (ni colgarse, ni morir) por su canal de notificaciones. Todo error se
-//! deglute: sin bus, sin daemon o con daemon sordo, simplemente devuelve
-//! `false` y el motor sigue.
+//! The contract is deliberately shy: a wallpaper must never fail (nor
+//! hang, nor die) because of its notification channel. Every error is
+//! swallowed: no bus, no daemon, or a deaf daemon simply returns `false`
+//! and the engine goes on.
 //!
-//! Se usa para avisar al creador cuando el hot-reload rechaza un shader
-//! roto (y cuando se recupera): ver [`DesktopNotifier`].
+//! Used to warn the creator when hot-reload rejects a broken shader (and
+//! when it recovers): see [`DesktopNotifier`].
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -16,18 +16,18 @@ use dbus::Message;
 use dbus::arg::messageitem::MessageItem;
 use dbus::blocking::{BlockingSender, SyncConnection};
 
-/// Se espera esto como máximo al daemon de notificaciones. El envío
-/// ocurre en la ruta crítica del bucle de frames: si el daemon no
-/// responde, se pierde la notificación, no el frame.
+/// At most this is expected from the notification daemon. The send happens
+/// on the frame loop's critical path: if the daemon does not answer, the
+/// notification is lost, not the frame.
 const NOTIFY_TIMEOUT: Duration = Duration::from_millis(300);
 
-/// Urgencia "normal" (1) del spec de notificaciones: un aviso de shader
-/// no es crítico y no debe robar atención como una alarma.
+/// "Normal" urgency (1) from the notifications spec: a shader notice is
+/// not critical and must not steal attention like an alarm.
 const URGENCY_NORMAL: u8 = 1;
 
-/// Hint `urgency` empaquetado como dict `a{sv}`. `MessageItem::from_dict`
-/// envuelve cada valor en `Variant` por nosotros; el error del generador
-/// es `Infallible` (la construcción no puede fallar con una entrada fija).
+/// `urgency` hint packed as an `a{sv}` dict. `MessageItem::from_dict`
+/// wraps each value in a `Variant` for us; the generator's error is
+/// `Infallible` (construction cannot fail with a fixed input).
 fn hint_urgency(level: u8) -> MessageItem {
     let item: Result<MessageItem, std::convert::Infallible> =
         MessageItem::from_dict([Ok(("urgency".to_owned(), MessageItem::Byte(level)))].into_iter());
@@ -37,28 +37,29 @@ fn hint_urgency(level: u8) -> MessageItem {
     }
 }
 
-/// Canal de notificaciones de escritorio.
+/// Desktop notification channel.
 ///
-/// - `Some(conn)`: conexión al bus de sesión ya establecida.
-/// - `None`: no hay bus (o no se pudo conectar); todas las llamadas son
-///   no-ops. Así el resto del motor no necesita comprobar nada.
+/// - `Some(conn)`: established session bus connection.
+/// - `None`: no bus (or connection failed); every call is a no-op. So the
+///   rest of the engine needs no checks.
 ///
-/// La conexión es `Send + Sync` (dbus 0.9: `SyncConnection`) y el envío
-/// está protegido por el mutex interno del crate.
+/// The connection is `Send + Sync` (dbus 0.9: `SyncConnection`) and sends
+/// are serialized by the crate's internal mutex.
 pub struct DesktopNotifier {
     conn: Option<SyncConnection>,
-    /// Serializa los envíos (la conexión lo permite, pero así el timeout
-    /// de un envío no encadena con el del siguiente desde varios hilos).
+    /// Serializes sends (the connection allows concurrent ones, but this
+    /// way one send's timeout does not chain with the next from several
+    /// threads).
     lock: Mutex<()>,
 }
 
 impl DesktopNotifier {
-    /// Intenta conectar al bus de sesión. Nunca falla: sin bus devuelve
-    /// un notifier que no hace nada.
+    /// Tries to connect to the session bus. Never fails: without a bus it
+    /// returns a notifier that does nothing.
     pub fn new() -> Self {
         let conn = SyncConnection::new_session().ok();
         if conn.is_none() {
-            log::debug!("sin bus de sesión: notificaciones de escritorio desactivadas");
+            log::debug!("no session bus: desktop notifications disabled");
         }
         DesktopNotifier {
             conn,
@@ -66,10 +67,10 @@ impl DesktopNotifier {
         }
     }
 
-    /// Notifier apagado a mano: sin bus, sin efectos. Para pruebas del
-    /// camino no-op — jamás debe existir un test que llame a `new()` en
-    /// una máquina con escritorio, porque enviaría burbujas reales
-    /// (ocurrió: el test de esta unidad notificó al usuario desde
+    /// Manually disabled notifier: no bus, no effects. For testing the
+    /// no-op path — there must never be a test calling `new()` on a
+    /// machine with a desktop, because it would send real bubbles
+    /// (it happened: this unit's test notified the user from
     /// `cargo test`).
     pub fn disabled() -> Self {
         DesktopNotifier {
@@ -78,8 +79,8 @@ impl DesktopNotifier {
         }
     }
 
-    /// Envía la notificación y espera la respuesta del daemon (con
-    /// [`NOTIFY_TIMEOUT`] de techo). Devuelve `true` si fue aceptada.
+    /// Sends the notification and waits for the daemon's reply (capped at
+    /// [`NOTIFY_TIMEOUT`]). Returns `true` if accepted.
     fn send(&self, summary: &str, body: &str) -> bool {
         let Some(conn) = &self.conn else {
             return false;
@@ -90,37 +91,37 @@ impl DesktopNotifier {
         match conn.send_with_reply_and_block(msg, NOTIFY_TIMEOUT) {
             Ok(_) => true,
             Err(e) => {
-                log::debug!("el daemon de notificaciones rechazó el aviso: {e}");
+                log::debug!("notification daemon rejected the notice: {e}");
                 false
             }
         }
     }
 
-    /// Aviso de shader rechazado en el hot-reload. `err` es el mensaje de
-    /// compilación de naga, ya recortado por el caller.
+    /// Shader-rejected notice from hot-reload. `err` is naga's compile
+    /// message, already clipped by the caller.
     ///
-    /// Devuelve `true` si el daemon mostró la burbuja.
+    /// Returns `true` if the daemon showed the bubble.
     pub fn shader_rejected(&self, err: &str) -> bool {
-        self.send("bruma: shader rechazado", err)
+        self.send("bruma: shader rejected", err)
     }
 
-    /// Aviso de recuperación: el shader volvió a compilar tras un rechazo.
+    /// Recovery notice: the shader compiled again after a rejection.
     pub fn shader_recovered(&self) -> bool {
         self.send(
-            "bruma: shader recuperado",
-            "El shader volvió a compilar y se aplicó al fondo.",
+            "bruma: shader recovered",
+            "The shader compiled again and was applied to the wallpaper.",
         )
     }
 }
 
-// FUTURO (Fase 6): reemplazo de burbujas por replaces_id — `Notify`
-// devuelve el id asignado en la respuesta; se retendrá cuando el flujo
-// de edición de creadores lo pida.
+// FUTURE (Phase 6): bubble replacement via replaces_id — `Notify` returns
+// the assigned id in the reply; it will be kept when the creator editing
+// flow asks for it.
 
-/// Construye el mensaje `Notify` completo (spec: firma usssiasb). Pura
-/// y sin bus: así los tests pueden auditar el mensaje byte a byte sin
-/// efectos en el escritorio. La última 'a' del dict es el de hints
-/// `a{sv}`; actions va vacío (array con firma explícita).
+/// Builds the full `Notify` message (spec: signature usssiasb). Pure and
+/// bus-free: tests can audit the message byte by byte with no desktop
+/// effects. The dict's trailing 'a' is the `a{sv}` hints; actions is empty
+/// (array with explicit signature).
 fn build_notify_message(summary: &str, body: &str) -> Message {
     let mut msg = Message::new_method_call(
         "org.freedesktop.Notifications",
@@ -128,16 +129,16 @@ fn build_notify_message(summary: &str, body: &str) -> Message {
         "org.freedesktop.Notifications",
         "Notify",
     )
-    .expect("la firma del método Notify es constante y válida");
+    .expect("the Notify method signature is constant and valid");
 
     let actions: [String; 0] = [];
     msg.append_items(&[
         MessageItem::Str("bruma".to_owned()), // app_name
-        MessageItem::UInt32(0),               // replaces_id (0 = nueva)
+        MessageItem::UInt32(0),               // replaces_id (0 = new)
         MessageItem::Str(String::new()),      // app_icon
         MessageItem::Str(summary.to_owned()), // summary
         MessageItem::Str(body.to_owned()),    // body
-        MessageItem::from(&actions[..]),      // actions (vacío)
+        MessageItem::from(&actions[..]),      // actions (empty)
         hint_urgency(URGENCY_NORMAL),         // hints a{sv}
         MessageItem::Int32(5000),             // expire_timeout ms
     ]);
@@ -162,36 +163,36 @@ impl std::fmt::Debug for DesktopNotifier {
 mod tests {
     use super::*;
 
-    /// Camino no-op: sin conexión, ambas llamadas devuelven false y no
-    /// tocan NADA. Usa `disabled()`, nunca `new()`: en una máquina con
-    /// sesión gráfica `new()` conectaría de verdad y `cargo test`
-    /// enviaría burbujas reales al escritorio del usuario.
+    /// No-op path: without a connection, both calls return false and touch
+    /// NOTHING. Uses `disabled()`, never `new()`: on a machine with a
+    /// graphical session `new()` would really connect and `cargo test`
+    /// would send real bubbles to the user's desktop.
     #[test]
-    fn deshabilitado_es_noop_total() {
+    fn disabled_is_fully_noop() {
         let n = DesktopNotifier::disabled();
-        assert!(!n.shader_rejected("no debe salir por el bus"));
+        assert!(!n.shader_rejected("must not reach the bus"));
         assert!(!n.shader_recovered());
     }
 
-    /// El mensaje Notify cumple la firma del spec: 8 argumentos,
-    /// app_name "bruma", hints como dict a{sv}, expiración 5 s.
-    /// Puro: no hay conexión ni envío.
+    /// The Notify message follows the spec signature: 8 arguments,
+    /// app_name "bruma", hints as an a{sv} dict, 5 s expiry.
+    /// Pure: no connection, no send.
     #[test]
-    fn mensaje_notify_cumple_spec() {
-        let msg = build_notify_message("título de prueba", "cuerpo de prueba");
+    fn notify_message_follows_spec() {
+        let msg = build_notify_message("test title", "test body");
         let items = msg.get_items();
-        assert_eq!(items.len(), 8, "firma usssiasb: 8 argumentos");
+        assert_eq!(items.len(), 8, "usssiasb signature: 8 arguments");
         assert_eq!(items[0], MessageItem::Str("bruma".to_owned()));
         assert_eq!(items[1], MessageItem::UInt32(0));
-        assert_eq!(items[3], MessageItem::Str("título de prueba".to_owned()));
-        assert_eq!(items[4], MessageItem::Str("cuerpo de prueba".to_owned()));
-        assert_eq!(items[6].signature(), "a{sv}", "hints como dict");
+        assert_eq!(items[3], MessageItem::Str("test title".to_owned()));
+        assert_eq!(items[4], MessageItem::Str("test body".to_owned()));
+        assert_eq!(items[6].signature(), "a{sv}", "hints as dict");
         assert_eq!(items[7], MessageItem::Int32(5000));
     }
 
-    /// El hint de urgencia genera la firma a{sv} correcta.
+    /// The urgency hint yields the correct a{sv} signature.
     #[test]
-    fn hint_urgencia_firma_dict_sv() {
+    fn urgency_hint_has_dict_sv_signature() {
         assert_eq!(hint_urgency(1).signature().to_string(), "a{sv}");
     }
 }
