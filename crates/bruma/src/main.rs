@@ -799,10 +799,11 @@ fn run_command(args: &[String]) {
     for r in &reports {
         let modo = if r.gpu { "gpu" } else { "color" };
         log::info!(
-            "fondo activo en {:?}: {}x{}px ({modo}) — Ctrl-C para salir",
+            "fondo activo en {:?}: {}x{}px, escala {} ({modo}) — Ctrl-C para salir",
             r.name,
             r.width,
-            r.height
+            r.height,
+            r.scale
         );
     }
 

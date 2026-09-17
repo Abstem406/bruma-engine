@@ -97,16 +97,26 @@ impl HupChannel {
         self.fd.as_fd()
     }
 
-    /// ¿Señal pendiente? Drena el contador y responde.
+    /// ¿Señal pendiente? Drena el contador y responde. NUNCA bloquea:
+    /// `read` directo sobre un eventfd en 0 BLOQUEA hasta la próxima
+    /// señal (el bucle llama a `drain` tras cada poll, señal o timeout,
+    /// y quedó congelado ahí), así que se consulta con `poll` de timeout
+    /// CERO y solo se lee si está listo.
     ///
-    /// Un solo `read` basta: eventfd es un contador, no una cola — si
-    /// llegaron 3 SIGHUP seguidos, un solo drenaje es lo correcto (una
-    /// recarga cubre N señales).
+    /// Un solo drenaje basta: eventfd es un contador, no una cola — si
+    /// llegaron 3 SIGHUP seguidos, una recarga cubre N señales.
     pub fn drain(&self) -> bool {
-        let mut buf = [0u8; 8];
-        match rustix::io::read(&self.fd, &mut buf) {
-            Ok(8) => true,
-            // EAGAIN: era un poll espurio (la señal ya se drenó).
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
+        let mut fds = [PollFd::new(&self.fd, PollFlags::IN)];
+        let cero = Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        match poll(&mut fds, Some(&cero)) {
+            Ok(n) if n > 0 => {
+                let mut buf = [0u8; 8];
+                matches!(rustix::io::read(&self.fd, &mut buf), Ok(8))
+            }
             _ => false,
         }
     }

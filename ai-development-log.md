@@ -557,3 +557,67 @@ mixto quedó demostrado).
   temporalmente; nunca construir sobre APIs marcadas experimentales u
   ocultas aunque compilen hoy. El gate del proyecto (`cargo install`
   como prueba de build de usuario final) entra al repertorio.
+
+## 2026-09-17 — Cierre de Fase 5: DPI por salida, hotplug verificado y dos deadlocks del canal SIGHUP
+
+- **Sesión:** cierre del hito de escritorio completo en Freebuff, con
+  sesión real de niri (WAYLAND_DISPLAY disponible, laptop en carga).
+- **DPI (el pendiente de la fase):**
+  - `buffer_pixels()` (función pura, 3 tests): píxeles de buffer =
+    tamaño lógico × escala. `OutputEntry` guarda la escala; la superficie
+    pide `set_buffer_scale` ANTES del primer commit; los renderers (SHM
+    y wgpu) reciben píxeles físicos en cada `draw_entry`/frame — nítido
+    en HiDPI. `scale_factor_changed` (antes stub no-op) aplica la nueva
+    escala con log de transición y repinta ya (no hay configure
+    garantizado si el tamaño lógico no cambió). `OutputReport` y el log
+    de la CLI ahora muestran la escala.
+- **Dos deadlocks del canal SIGHUP, cazados con SIGABRT + coredumpctl**
+  (ptrace bloqueado por yama=1 y el proceso `setsid` queda huérfano —
+  el core dump fue el único inspector disponible, y sobró):
+  1. **Deadlock de recarga:** `reload_renderers` corría DENTRO del
+     bloque de `prepare_read()` — con el slot de lectura retenido. La
+     factory construye el `AnimatedRenderer`, wgpu pregunta las
+     capacidades de la superficie y **RADV hace un roundtrip de
+     Wayland** (`wl_display_roundtrip_queue` → `wl_display_read_events`
+     esperando el read que solo nuestro hilo puede hacer). Core en la
+     mano. Fix: el callback y la recarga corren FUERA del guard; el
+     `read()` solo se consume si el poll reportó datos (`revents`),
+     que además evita bloquear tras un timeout de animación vencido.
+  2. **`drain()` bloqueante:** un `read` directo sobre un eventfd en 0
+     BLOQUEA hasta la próxima señal; el bucle llama `drain` tras cada
+     poll (señal O timeout) → congelación total: 0 ticks crónicos, el
+     fondo estático. Fue el primer síntoma de la sesión ("falso
+     estático") y el fix intermedio (poll con timeout INFINITO) lo
+     reprodujo exacto — la simulación mental de `Ok(0)` era falsa.
+     Fix final: poll de timeout CERO dentro de `drain`, read solo si
+     está listo. La CPU (0 ticks donde debía haber ~8) fue la señal
+     que delató ambos; los píxeles mintieron porque el shell también
+     se mueve.
+- **Demo DPI verificada en niri** (`demos/fase5/demo-dpi.log` +
+  capturas): eDP-1 1920x1200 scale 1→2→1 editando la config de DMS y
+  recargando niri: transiciones `escala de buffer 1→2` y `2→1` en el
+  log, proceso vivo, CPU 8 ticks/5s en ambas escalas, y cobertura de
+  quad verificada en las 4 esquinas + centro del buffer nuevo (la
+  lección del bug de la Fase 2 aplicada). Escritorio restaurado byte a
+  byte (md5 del outputs.kdl de DMS verificado).
+- **Demo hotplug verificada en niri** (`demos/fase5/demo-hotplug.log`):
+  apagar/reconectar HDMI-A-1 con `niri msg output HDMI-A-1 off/on`:
+  superficie cerrada por el compositor ("restantes: 1") y recreada en
+  caliente con la fuente de su config (factory sobre el modelo vivo;
+  sin warning de fallback). La pausa fullscreen (D12) siguió
+  correctamente al juego que migró de salida: 0 ticks con la única
+  salida en fullscreen, 7 ticks al reconectar. SIGHUP posterior
+  estable (31 ticks/5s con sesión limpia, recarga incluida).
+- **Descubrimientos de niri/DMS (verificados, no recordados):**
+  `off true` en un bloque `output` NO es válido en este niri
+  ("unexpected argument", recarga rechazada); apagar/reconectar es
+  tarea del IPC (`niri msg output X off/on`). DMS reescribe su
+  `outputs.kdl` durante el ciclo off/on (cambia el modo al preferido):
+  restaurar desde backup y verificar md5. `niri msg outputs` sigue
+  listando las salidas apagadas: no sirve como aserción de apagado.
+- **Gates:** fmt/clippy 0 warnings, 43 tests (3 nuevos de DPI),
+  `cargo install` OK. Commits: traducción, SIGHUP+rustix, DPI+hotplug.
+- **Fase 5 cerrada en PLAN.md.** Límites documentados (no bloquean):
+  escala fraccional (niri redondea a entero), posición real del cursor
+  para `u_mouse`, fps de config solo al reiniciar. **Siguiente paso:**
+  Fase 6 — herramientas para creadores (`bruma new`, plantillas WGSL).

@@ -1,0 +1,77 @@
+[bruma] INFO: superficie de fondo creada en salida Some("eDP-1")
+[bruma] INFO: superficie de fondo creada en salida Some("HDMI-A-1")
+[bruma] INFO: salida Some("eDP-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("eDP-1"): escala de buffer 1→2
+[bruma] INFO: salida Some("eDP-1"): escala de buffer 2→1
+[bruma] INFO: superficie cerrada por el compositor (Some("HDMI-A-1")); restantes: 1
+[bruma] INFO: salida Some("eDP-1"): pausa fullscreen = true
+[bruma] INFO: superficie de fondo creada en salida Some("HDMI-A-1")
+[bruma] INFO: salida Some("eDP-1"): pausa fullscreen = false
+[bruma] INFO: superficie cerrada por el compositor (Some("HDMI-A-1")); restantes: 1
+[bruma] INFO: salida Some("eDP-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("eDP-1"): pausa fullscreen = false
+[bruma] INFO: superficie de fondo creada en salida Some("HDMI-A-1")
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = false

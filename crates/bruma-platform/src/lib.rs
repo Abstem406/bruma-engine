@@ -121,6 +121,9 @@ struct BackgroundState {
 }
 
 /// Una superficie de fondo en una salida concreta.
+///
+/// `width`/`height` son el tamaño LÓGICO del configure; los píxeles de
+/// buffer (lo que se dibuja) salen de [`buffer_pixels`] con la escala.
 struct OutputEntry {
     /// Proxy de la salida (para casar `update_output`/`output_destroyed`
     /// con su entrada, y para consultar el fullscreen del toplevel).
@@ -130,6 +133,9 @@ struct OutputEntry {
     layer: LayerSurface,
     width: u32,
     height: u32,
+    /// Escala entera de buffer anunciada por el compositor (1 por
+    /// defecto; con escala fraccional niri redondea hacia arriba).
+    scale: u32,
     configured: bool,
     /// Renderer de ESTA salida (construido por la factory). `None` si la
     /// factory falló o no hay factory: fallback de color sólido.
@@ -137,6 +143,14 @@ struct OutputEntry {
     /// Color de ESTA salida para el fallback SHM (de la factory). `None`
     /// usa el color global de la ventana (comportamiento previo).
     fallback_color: Option<Color>,
+}
+
+/// Píxeles de buffer para un tamaño lógico y una escala entera.
+pub fn buffer_pixels(logical: (u32, u32), scale: u32) -> (u32, u32) {
+    (
+        logical.0.saturating_mul(scale),
+        logical.1.saturating_mul(scale),
+    )
 }
 
 /// Información mínima de una salida conectada.
@@ -204,8 +218,11 @@ pub type SurfaceRendererFactory =
 #[derive(Debug, Clone)]
 pub struct OutputReport {
     pub name: Option<String>,
+    /// Tamaño de buffer dibujado (lógico × escala), en píxeles.
     pub width: u32,
     pub height: u32,
+    /// Escala entera de la salida (DPI).
+    pub scale: u32,
     /// ¿Tiene renderer de la factory (true) o fallback de color (false)?
     pub gpu: bool,
 }
@@ -391,11 +408,15 @@ impl BackgroundWindow {
             .state
             .outputs
             .iter()
-            .map(|o| OutputReport {
-                name: o.info.name.clone(),
-                width: o.width,
-                height: o.height,
-                gpu: o.renderer.is_some(),
+            .map(|o| {
+                let (bw, bh) = buffer_pixels((o.width, o.height), o.scale);
+                OutputReport {
+                    name: o.info.name.clone(),
+                    width: bw,
+                    height: bh,
+                    scale: o.scale,
+                    gpu: o.renderer.is_some(),
+                }
             })
             .collect();
         if reports.iter().any(|r| r.width == 0) {
@@ -496,9 +517,12 @@ impl BackgroundWindow {
                         if global_pause {
                             break;
                         }
-                        let (w, h) = (
-                            self.state.outputs[idx].width,
-                            self.state.outputs[idx].height,
+                        let (w, h) = buffer_pixels(
+                            (
+                                self.state.outputs[idx].width,
+                                self.state.outputs[idx].height,
+                            ),
+                            self.state.outputs[idx].scale,
                         );
                         if w == 0 || h == 0 {
                             continue;
@@ -579,6 +603,9 @@ impl BackgroundWindow {
             }
         });
 
+        // SIGHUP pendiente durante este poll (se drena abajo, dentro del
+        // bloque del guard).
+        let mut hup = false;
         if let Some(guard) = self.event_queue.prepare_read() {
             // El handle Backend es un Arc barato; el BorrowedFd presta de
             // él, así que el handle vive en este bloque. El eventfd del
@@ -591,27 +618,36 @@ impl BackgroundWindow {
             if let Some(h) = &hup_borrow {
                 fds.push(PollFd::new(h, PollFlags::IN));
             }
+            let mut wayland_listo = false;
             match poll(&mut fds, wait.as_ref()) {
                 // ready == 0: venció el timeout (toque de animación).
-                // ready > 0: llegaron datos; se leen y despachan abajo.
-                Ok(_) => {}
+                // ready > 0: hay datos en alguno de los dos fds.
+                Ok(_) => {
+                    wayland_listo = fds[0].revents().intersects(PollFlags::IN | PollFlags::HUP);
+                }
                 // EINTR (señales como SIGINT): no es un error para el bucle.
                 Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(PlatformError::Poll(e.to_string())),
             }
-            // SIGHUP: drenar y, si el callback cambió el modelo de
-            // fuentes, reconstituir renderers y repintar.
-            if let Some(channel) = self.state.hup.as_ref()
-                && channel.drain()
-                && self.state.on_hup.as_mut().is_some_and(|f| f())
-            {
-                self.reload_renderers();
+            hup = self.state.hup.as_ref().is_some_and(|c| c.drain());
+            // El slot de lectura SOLO se consume con datos: `read` con el
+            // socket vacío BLOQUEA hasta el primer evento (y tras un
+            // timeout de animación es el caso común). Con SIGHUP pendiente
+            // se suelta sin leer: la recarga reconstruye renderers wgpu y
+            // el driver hace roundtrips de Wayland que necesitan el slot
+            // libre (si no, se espera a sí mismo: deadlock, visto en core
+            // dump dentro de wl_display_read_events).
+            if wayland_listo && !hup {
+                guard
+                    .read()
+                    .map_err(|e| PlatformError::Poll(e.to_string()))?;
             }
-            // `read` consume el guard; si devolvió 0 eventos (p. ej. solo
-            // EINTR), el dispatch_pending de abajo no tendrá nada nuevo.
-            guard
-                .read()
-                .map_err(|e| PlatformError::Poll(e.to_string()))?;
+        }
+        // Recarga FUERA del guard de lectura (ver arriba: roundtrips del
+        // driver durante la construcción de renderers). Los eventos que
+        // quedaron en el socket se leen en la próxima vuelta del bucle.
+        if hup && self.state.on_hup.as_mut().is_some_and(|f| f()) {
+            self.reload_renderers();
         }
 
         self.event_queue.dispatch_pending(&mut self.state)?;
@@ -651,6 +687,15 @@ impl BackgroundState {
         layer.set_size(0, 0);
         // Un wallpaper no debe robar el teclado ni el puntero.
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        // Escala inicial (la confirmará preferred_buffer_scale vía
+        // `scale_factor_changed`): el buffer se dibuja en píxeles físicos,
+        // nítido en HiDPI. Debe fijarse ANTES del primer commit.
+        let scale = self
+            .output_state
+            .info(output)
+            .map(|i| i.scale_factor.max(1) as u32)
+            .unwrap_or(1);
+        layer.wl_surface().set_buffer_scale(scale as i32);
         layer.commit();
 
         // Renderer por salida, con los punteros crudos de LA superficie
@@ -666,6 +711,7 @@ impl BackgroundState {
             layer,
             width: 0,
             height: 0,
+            scale,
             configured: false,
             renderer,
             fallback_color,
@@ -708,6 +754,28 @@ impl BackgroundState {
         }
     }
 
+    /// Aplica la escala entera de buffer de una entrada: llama a
+    /// `set_buffer_scale` y la registra en la entrada (el tamaño de
+    /// buffer lo calcula `draw_entry` con [`buffer_pixels`]). Solo actúa
+    /// en transición real.
+    fn apply_scale(&mut self, idx: usize, scale: u32) {
+        let scale = scale.max(1);
+        if self.outputs[idx].scale == scale {
+            return;
+        }
+        log::info!(
+            "salida {:?}: escala de buffer {}→{}",
+            self.outputs[idx].info.name,
+            self.outputs[idx].scale,
+            scale
+        );
+        self.outputs[idx].scale = scale;
+        self.outputs[idx]
+            .layer
+            .wl_surface()
+            .set_buffer_scale(scale as i32);
+    }
+
     /// Busca la entrada dueña de una superficie layer-shell.
     fn entry_by_surface(&mut self, surface: &wl_surface::WlSurface) -> Option<usize> {
         self.outputs
@@ -748,9 +816,13 @@ impl BackgroundState {
         entry.layer.commit();
     }
 
-    /// Dibuja una entrada (renderer si hay; color si no).
+    /// Dibuja una entrada (renderer si hay; color si no), en píxeles de
+    /// buffer (tamaño lógico × escala).
     fn draw_entry(&mut self, idx: usize) {
-        let (w, h) = (self.outputs[idx].width, self.outputs[idx].height);
+        let (w, h) = buffer_pixels(
+            (self.outputs[idx].width, self.outputs[idx].height),
+            self.outputs[idx].scale,
+        );
         if w == 0 || h == 0 {
             return;
         }
@@ -776,11 +848,16 @@ impl CompositorHandler for BackgroundState {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _new_factor: i32,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
     ) {
-        // Fase 5 (futuro): redimensionar buffers por DPI. Con shm el
-        // factor no afecta al tamaño en píxeles del buffer lógico.
+        // DPI por salida: el buffer pasa a dibujarse en píxeles físicos
+        // (lógico × escala). Se repinta ya: un configure nuevo no está
+        // garantizado (el tamaño lógico no cambió).
+        if let Some(idx) = self.entry_by_surface(surface) {
+            self.apply_scale(idx, new_factor.max(1) as u32);
+            self.draw_entry(idx);
+        }
     }
 
     fn transform_changed(
@@ -1010,3 +1087,23 @@ impl ProvidesRegistryState for BackgroundState {
 // de sctk implementan Dispatch2 contra nuestros traits handler; esta macro
 // genera los impls Dispatch requeridos por wayland-client.
 delegate_dispatch2!(BackgroundState);
+
+#[cfg(test)]
+mod tests {
+    use super::buffer_pixels;
+
+    #[test]
+    fn escala_1_deja_el_tamano_logico() {
+        assert_eq!(buffer_pixels((1920, 1200), 1), (1920, 1200));
+    }
+
+    #[test]
+    fn escala_2_duplica_los_pixeles() {
+        assert_eq!(buffer_pixels((1920, 1200), 2), (3840, 2400));
+    }
+
+    #[test]
+    fn tamano_cero_no_se_infla() {
+        assert_eq!(buffer_pixels((0, 1200), 2), (0, 2400));
+    }
+}

@@ -89,7 +89,7 @@
   que ordena el directorio de instalación `~/.local/share/bruma/
   wallpapers/NOMBRE/VERSION`).
 
-### Fase 5 — Escritorio completo (4-8 semanas) — en curso
+### Fase 5 — Escritorio completo (4-8 semanas) — ✅ (2026-09-17)
 - ✅ Multi-monitor: UNA superficie layer-shell por salida (con output
   concreto en `create_layer_surface`), creada en hotplug (`new_output`),
   destruida al retirar la salida (`output_destroyed`/`closed`).
@@ -129,7 +129,23 @@
 - ✅ Servicio de usuario systemd (`bruma service install|remove`):
   unidad generada con el exe real, `Restart=always` (verificado: SIGTERM
   → revive en 2 s), arranca con `graphical-session.target`.
-- Pendiente en la fase: DPI/escala por salida, hotplug de config.
+- ✅ DPI/escala por salida: `set_buffer_scale` con la escala anunciada
+  por el compositor; los buffers (SHM y wgpu) se dibujan en píxeles
+  físicos (lógico × escala), nítidos en HiDPI. Cambio de escala en
+  caliente (`scale_factor_changed`) verificado en niri: eDP-1
+  1920x1200 scale 1→2→1, animación continua y quad cubriendo las 4
+  esquinas del buffer nuevo (CPU 8 ticks/5s en ambas escalas).
+- ✅ Hotplug de salidas verificado en niri con IPC (`niri msg output
+  X off/on`): superficie destruida al apagar ("restantes: 1") y nueva
+  superficie con la fuente de su config al reconectar; la pausa
+  fullscreen (D12) sigue correctamente a la ventana que migra de
+  salida (CPU: 0 ticks con la única salida en fullscreen, 7 ticks al
+  reconectar). SIGHUP tras hotplug estable.
+- Límites conocidos (no bloquean el hito): escala fraccional
+  (`wp_fractional_scale` — niri redondea a entero, el fondo queda
+  ligeramente sobre-escaneado), posición real del cursor para
+  `u_mouse` (los wallpapers reactivos lo pedirán; se evaluará con el
+  primer caso real), FPS de config solo aplicado al reiniciar.
 - Compatibilidad verificada: niri (referencia), Hyprland, sway, KWin.
 - GNOME/Mutter sigue siendo non-goal en v1.
 

@@ -1,0 +1,18 @@
+[bruma] INFO: config persistente cargada (run sin flags usa la config)
+[bruma] INFO: bruma run — modo mixto por salida (30 fps)
+[bruma] INFO: sesión gráfica de logind: /org/freedesktop/login1/session/_34 (Type=wayland)
+[bruma] INFO: estado inicial: sesión desbloqueada (LockedHint=false)
+[bruma] INFO: estado inicial: con corriente (UPower State=4)
+[bruma] INFO: sesión gráfica de logind: /org/freedesktop/login1/session/_34 (Type=wayland)
+[bruma] INFO: pausa global: fuente bloqueo disponible (logind), fuente batería disponible (UPower)
+[bruma] INFO: Found 6 cooperative matrix configurations supported by wgpu
+[bruma] INFO: wgpu: adaptador AMD Radeon 660M (RADV REMBRANDT) (IntegratedGpu), backend Vulkan (compartido entre salidas)
+[bruma] INFO: toplevel 'Sniper3' fullscreen=true (estados: [3, 2])
+[bruma] INFO: superficie de fondo creada en salida Some("eDP-1")
+[bruma] INFO: superficie de fondo creada en salida Some("HDMI-A-1")
+[bruma] INFO: fondo activo en Some("eDP-1"): 1920x1200px, escala 1 (gpu) — Ctrl-C para salir
+[bruma] INFO: fondo activo en Some("HDMI-A-1"): 2560x1440px, escala 1 (color) — Ctrl-C para salir
+[bruma] INFO: salida Some("eDP-1"): pausa fullscreen = false
+[bruma] INFO: salida Some("HDMI-A-1"): pausa fullscreen = true
+[bruma] INFO: salida Some("eDP-1"): escala de buffer 1→2
+[bruma] INFO: salida Some("eDP-1"): escala de buffer 2→1

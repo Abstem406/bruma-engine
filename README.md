@@ -10,11 +10,12 @@ comparta sus fondos.
 
 ## Estado del proyecto
 
-Fase 3 completada: `bruma run --shader hola.wgsl` ejecuta un shader
-animado (wgpu/Vulkan, límite de FPS, CPU ~4% a 30 fps en 2560x1440) y el
-archivo se recarga **en caliente** al editarlo, sin reiniciar. También:
-imagen a pantalla completa (Fase 2), color sólido (Fase 1) y triángulo de
-prueba. En construcción — ver [PLAN.md](PLAN.md).
+Fases 0–5 completadas: shaders WGSL animados con hot-reload, imagen y
+color sólido, formato de paquete `.wallpaper` (instalación segura con
+`validate`/`install`), y escritorio completo — multi-monitor con fondo
+distinto por pantalla, pausa automática en fullscreen/bloqueo/batería,
+escala HiDPI por salida y recarga de config en caliente. En construcción:
+herramientas para creadores (Fase 6) — ver [PLAN.md](PLAN.md).
 
 ```bash
 bruma run                        # sin flags: usa la config persistente
@@ -77,7 +78,7 @@ wgpu, Wayland ni Steam (ver [DECISIONS.md](DECISIONS.md)).
 | 2 | wgpu + WGSL | ✅ imagen a pantalla completa |
 | 3 | contrato de runtime + hot-reload | ✅ shader animado editado en vivo |
 | 4 | formato `.wallpaper` | ✅ `pack` → `validate` → `install` → `run --package` |
-| 5 | multi-monitor, pausas | wallpaper por pantalla |
+| 5 | multi-monitor, pausas | ✅ wallpaper por pantalla, HiDPI, hotplug |
 | 6 | plantillas para creadores | un extraño crea y comparte |
 | 7 | galería web (WASM/WebGPU) | previews vivos en el navegador |
 
