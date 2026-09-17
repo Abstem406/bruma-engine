@@ -1,43 +1,42 @@
 //! # bruma-runtime
 //!
-//! Contrato de runtime: la API que un wallpaper puede consumir (tiempo,
-//! delta, resolución, mouse, parámetros, audio opcional).
+//! Contrato de runtime: la API que un wallpaper puede consumir
+//! (tiempo, delta, resolución, mouse, parámetros, audio opcional).
 //!
-//! Estado: **Fase 3**. Este crate es **puro**: define el contrato
-//! compartido por el runtime nativo (wgpu) y el futuro runtime web
-//! (WASM, Fase 7), sin dependencias (D6).
+//! Estado: **Fase 3**. Este crate es **puro**: define el contrato que
+//! comparten el runtime nativo (wgpu) y el futuro runtime web (WASM,
+//! Fase 7), sin dependencias (D6).
 //!
-//! La implementación nativa vive en `bruma-renderer-wgpu`; la demo de
-//! la fase es un shader animado editado en vivo sin reiniciar.
+//! La implementación nativa vive en `bruma-renderer-wgpu`; la demo de la
+//! fase es un shader animado que se edita en vivo sin reiniciar.
 
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};
 
-/// Estado de un frame: lo que el runtime le entrega al renderer en
-/// cada paso de animación. Es el mismo concepto de un uniform block
-/// estándar de shadertoy / LiveWallpaper: todo lo que un shader
-/// necesita saber del mundo.
+/// Estado de un frame: lo que el runtime le entrega al renderizador en
+/// cada animación. Es el mismo concepto que un uniform block estándar de
+/// shadertoy/LiveWallpaper: todo lo que un shader necesita saber del mundo.
 ///
-/// Definido aquí (crate puro) para que la futura galería web lo
-/// reutilice tal cual: son solo números.
+/// Se define aquí (crate puro) para que la futura galería web lo reutilice
+/// tal cual: son solo números.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameState {
-    /// Segundos desde que arrancó el wallpaper.
+    /// Segundos desde el arranque del wallpaper.
     pub time: f32,
-    /// Segundos desde el frame anterior (para físicas estables).
+    /// Segundos desde el frame anterior (para física estable).
     pub delta: f32,
     /// Ancho del área de dibujo, en píxeles de buffer.
     pub width: u32,
     /// Alto del área de dibujo, en píxeles de buffer.
     pub height: u32,
-    /// Posición X del cursor (píxeles; `-1.0` = desconocida).
+    /// Posición X del cursor en el área de dibujo (píxeles; `-1.0` = desconocida).
     pub mouse_x: f32,
-    /// Posición Y del cursor (píxeles; `-1.0` = desconocida).
+    /// Posición Y del cursor en el área de dibujo (píxeles; `-1.0` = desconocida).
     pub mouse_y: f32,
     /// Valores planos de los primeros parámetros declarados (en WGSL:
     /// `u_params0..3`). Los nombres los lleva el manifiesto (Fase 4) y
-    /// [`WallpaperRuntime::params`]; a la GPU solo llegan números.
+    /// [`WallpaperRuntime::params`]; a la GPU solo le llegan números.
     pub params: [f32; 4],
 }
 
@@ -57,10 +56,9 @@ impl Default for FrameState {
 
 /// Parámetros declarados por un wallpaper y ajustables por el usuario.
 ///
-/// Definidos en la Fase 3; la UI generada desde el manifiesto llega
-/// con la Fase 6 (herramientas para creadores). `value` es un slider
-/// continuo 0..=1: suficiente para animar shaders sin un sistema de
-/// tipos grande.
+/// Fase 3 los define; la UI generada a partir del manifiesto llega con la
+/// Fase 6 (herramientas para creadores). `value` es un slider continuo
+/// 0..=1: suficiente para animar shaders sin un sistema de tipos grande.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamValue {
     pub name: String,
@@ -69,26 +67,26 @@ pub struct ParamValue {
 
 /// Contrato del runtime de un wallpaper animado.
 ///
-/// El motor llama a [`Self::begin_frame`] antes de pintar cada frame y
-/// a [`Self::end_frame`] tras presentarlo. El runtime acumula el
-/// tiempo y decide el ritmo (límite de FPS); el renderer solo pinta
-/// el frame que el runtime pide.
+/// El motor llama a [`Self::begin_frame`] antes de pintar cada frame y a
+/// [`Self::end_frame`] después de presentarlo. El runtime acumula el
+/// tiempo y decide el ritmo (límite de FPS); el renderizador solo pinta
+/// el frame que el runtime le pide.
 ///
-/// Implementaciones: nativo en `bruma-renderer-wgpu`, WASM en Fase 7.
+/// Implementaciones: nativa en `bruma-renderer-wgpu`, WASM en Fase 7.
 pub trait WallpaperRuntime {
     /// Avanza el estado al siguiente frame.
     ///
-    /// `now` es el instante monótono actual; el runtime calcula
-    /// `delta` y `time` y aplica el límite de FPS. Devuelve una
-    /// decisión Skip cuando el ritmo dice que aún no toca pintar y el
-    /// llamador puede dormir hasta el próximo deadline.
+    /// `now` es el instante monotónico actual; el runtime calcula `delta`
+    /// y `time` y aplica el límite de FPS. Devuelve `false` si por ritmo
+    /// (límite de FPS) todavía no toca pintar frame y el caller puede
+    /// dormirse hasta el próximo vencimiento.
     fn begin_frame(&mut self, now: std::time::Instant) -> FrameDecision;
 
-    /// Frames por segundo objetivo (0 = sin límite, corre al ritmo de
+    /// Frames por segundo objetivo (0 = sin límite, corre al ritmo del
     /// vblank/swapchain).
     fn target_fps(&self) -> u32;
 
-    /// Estado del frame actual (válido tras `begin_frame`).
+    /// Estado del frame en curso (válido tras `begin_frame`).
     fn state(&self) -> FrameState;
 
     /// Parámetros ajustables actuales (por nombre).
@@ -97,8 +95,8 @@ pub trait WallpaperRuntime {
     /// Actualiza un parámetro por nombre; `false` si no existe.
     fn set_param(&mut self, name: &str, value: f32) -> bool;
 
-    /// Trabajo extra tras presentar (estadísticas, pausas...).
-    /// Por defecto no hace nada.
+    /// Un segundo de trabajo después de presentar (stats, pausas...).
+    /// El default no hace nada.
     fn end_frame(&mut self) {}
 }
 
@@ -107,15 +105,15 @@ pub trait WallpaperRuntime {
 pub enum FrameDecision {
     /// Toca pintar: el estado ya está actualizado.
     Draw,
-    /// Aún no: dormir como máximo hasta `deadline`.
+    /// Aún no: dormirse hasta `deadline` como muy tarde.
     Skip {
-        /// Instante absoluto en que vence el próximo frame.
+        /// Instante absoluto en el que vence el próximo frame.
         deadline: std::time::Instant,
     },
 }
 
-/// Ayudante para tests y usuarios: duración mínima entre frames para
-/// un FPS objetivo (0 fps => sin límite => `Duration::ZERO`).
+/// Helper de tests y usuarios: duración mínima entre frames para un FPS
+/// objetivo (0 fps => sin límite => `Duration::ZERO`).
 pub fn frame_interval(target_fps: u32) -> Duration {
     if target_fps == 0 {
         Duration::ZERO
@@ -124,14 +122,14 @@ pub fn frame_interval(target_fps: u32) -> Duration {
     }
 }
 
-/// Runtime de propósito general: reloj acumulado, límite de FPS,
-/// posición del mouse y parámetros ajustables. Cubre la gran mayoría
-/// de los wallpapers; los casos especiales (escena con física propia,
-/// pausa por visibilidad...) implementan [`WallpaperRuntime`] directo.
+/// Runtime de uso general: reloj acumulado, límite de FPS, posición del
+/// mouse y parámetros ajustables. Cubre la gran mayoría de wallpapers;
+/// casos especiales (escena con física propia, pausa por visibilidad...)
+/// implementan [`WallpaperRuntime`] directamente.
 ///
-/// Siempre declara al menos un parámetro `"param0"`, el mismo que
-/// expone el shader de demo (`u_params0`): así la CLI puede animarlo
-/// sin conocer el wallpaper concreto.
+/// Siempre declara al menos un parámetro `"param0"`, el mismo que expone
+/// el shader de demo (`u_params0`): así la CLI puede animarlo sin
+/// conocer el wallpaper concreto.
 #[derive(Debug, Clone)]
 pub struct BasicRuntime {
     fps: u32,
@@ -156,15 +154,15 @@ impl BasicRuntime {
         }
     }
 
-    /// Marca el runtime como pausado desde el inicio.
+    /// Marca el runtime como pausado desde el arranque.
     pub fn paused(mut self) -> Self {
         self.paused = true;
         self
     }
 
-    /// Pausa o reanuda la animación. En pausa, el tiempo NO avanza y
-    /// el runtime pide despertar solo una vez por segundo (el socket
-    /// de Wayland despierta el bucle igual con cualquier evento).
+    /// Pausa o reanuda la animación. En pausa el tiempo NO avanza y el
+    /// runtime pide despertar solo cada segundo (el socket de Wayland
+    /// despierta el bucle igualmente ante cualquier evento).
     pub fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
     }
@@ -174,37 +172,37 @@ impl BasicRuntime {
     }
 
     /// Fija un valor inicial para un parámetro (p. ej. desde la CLI).
-    /// Ignora en silencio los nombres desconocidos: `set_param` sí
-    /// reporta; este constructor no tiene a quién reportarle.
+    /// Ignora silenciosamente nombres desconocidos: `set_param` sí
+    /// reporta, este constructor no tiene a quién reportarle.
     pub fn with_param(mut self, name: &str, value: f32) -> Self {
         let _ = self.set_param(name, value);
         self
     }
 
-    /// Reemplaza los parámetros declarados por los dados (máx 4: los
-    /// que caben en el uniform block). Lo usa la CLI al cargar un
+    /// Sustituye los parámetros declarados por los dados (máximo 4: los
+    /// que caben en el uniform block). La usa la CLI al cargar un
     /// paquete, cuyos nombres vienen del manifiesto.
     pub fn set_params(&mut self, mut params: Vec<ParamValue>) {
         params.truncate(4);
         self.params = params;
     }
 
-    /// Fija el valor del parámetro en la posición `index` (0..3), que
-    /// es como llega a la GPU (`u_params0..3`).
+    /// Fija el valor del parámetro en la posición `index` (0..3), que es
+    /// como llega a la GPU (`u_params0..3`).
     pub fn set_param_at(&mut self, index: usize, value: f32) {
         if let Some(p) = self.params.get_mut(index) {
             p.value = value.clamp(0.0, 1.0);
         }
     }
 
-    /// Actualiza la posición del cursor (lo llama la plataforma). Pasa
-    /// por `state.mouse_x/y`, que el renderer copia a los uniforms.
+    /// Actualiza la posición del cursor (la llama la plataforma). Pasa
+    /// por `state.mouse_x/y`, que el renderizador copia a los uniforms.
     pub fn set_mouse(&mut self, x: f32, y: f32) {
         self.state.mouse_x = x;
         self.state.mouse_y = y;
     }
 
-    /// Actualiza la resolución del área de dibujo (lo llama la
+    /// Actualiza la resolución del área de dibujo (la llama la
     /// plataforma tras cada configure).
     pub fn set_resolution(&mut self, width: u32, height: u32) {
         self.state.width = width;
@@ -214,7 +212,7 @@ impl BasicRuntime {
 
 impl WallpaperRuntime for BasicRuntime {
     fn begin_frame(&mut self, now: Instant) -> FrameDecision {
-        // En pausa el tiempo está congelado: no tocamos `last` ni `time`.
+        // En pausa el tiempo se congela: no tocamos `last` ni `time`.
         if self.paused {
             return FrameDecision::Skip {
                 deadline: now + Duration::from_secs(1),
@@ -320,21 +318,21 @@ mod tests {
     }
 
     #[test]
-    fn frame_interval_values() {
+    fn intervalo_de_frame() {
         assert_eq!(frame_interval(60), Duration::from_nanos(16_666_666));
         assert_eq!(frame_interval(30), Duration::from_nanos(33_333_333));
         assert_eq!(frame_interval(0), Duration::ZERO);
     }
 
     #[test]
-    fn default_state_has_unknown_mouse() {
+    fn estado_default_tiene_mouse_desconocido() {
         let s = FrameState::default();
         assert_eq!((s.mouse_x, s.mouse_y), (-1.0, -1.0));
         assert_eq!(s.time, 0.0);
     }
 
     #[test]
-    fn runtime_limits_fps_and_accumulates_time() {
+    fn runtime_limita_fps_y_acumula_tiempo() {
         let mut rt = TestRuntime {
             last: None,
             time: 0.0,
@@ -351,7 +349,7 @@ mod tests {
             FrameDecision::Skip { deadline } => {
                 assert_eq!(deadline - t0, Duration::from_millis(100));
             }
-            other => panic!("expected Skip, got {other:?}"),
+            other => panic!("esperaba Skip, hubo {other:?}"),
         }
 
         // 150 ms después: dibuja y acumula tiempo desde el último frame.
@@ -361,26 +359,26 @@ mod tests {
     }
 
     #[test]
-    fn basic_runtime_pause_freezes_time() {
+    fn basic_runtime_pausa_congela_el_tiempo() {
         let mut rt = BasicRuntime::new(30).paused();
         let t0 = Instant::now();
 
-        // En pausa: skip con deadline lejano (~1 s) y tiempo intacto.
+        // En pausa: skip con deadline lejana (~1 s) y tiempo intacto.
         match rt.begin_frame(t0) {
             FrameDecision::Skip { deadline } => {
                 assert_eq!(deadline - t0, Duration::from_secs(1));
             }
-            other => panic!("expected Skip, got {other:?}"),
+            other => panic!("esperaba Skip, hubo {other:?}"),
         }
 
         let t1 = t0 + Duration::from_millis(2500);
         match rt.begin_frame(t1) {
             FrameDecision::Skip { .. } => {}
-            other => panic!("expected Skip, got {other:?}"),
+            other => panic!("esperaba Skip, hubo {other:?}"),
         }
 
-        // Reanudar: el primer frame es inmediato y el tiempo parte de
-        // 0 (el reloj no acumuló en pausa).
+        // Reanudar: el primer frame es inmediato y el tiempo arranca en 0
+        // (el reloj no acumuló mientras estaba pausado).
         rt.set_paused(false);
         assert_eq!(rt.begin_frame(t1), FrameDecision::Draw);
         assert_eq!(rt.state().time, 0.0);
@@ -391,16 +389,16 @@ mod tests {
     }
 
     #[test]
-    fn basic_runtime_params_set_by_name() {
+    fn basic_runtime_parametros_se_fijan_por_nombre() {
         let mut rt = BasicRuntime::new(60);
         assert!(rt.set_param("param0", 0.7));
         assert_eq!(rt.params()[0].value, 0.7);
-        // Clampeado al rango declarado 0..=1.
+        // Se acota al rango declarado 0..=1.
         assert!(rt.set_param("param0", 5.0));
         assert_eq!(rt.params()[0].value, 1.0);
         // Nombre desconocido: false.
-        assert!(!rt.set_param("does_not_exist", 0.5));
-        // Y el constructor fluent también lo aplica.
+        assert!(!rt.set_param("no_existe", 0.5));
+        // Y el constructor fluido también lo aplica.
         assert_eq!(
             BasicRuntime::new(60).with_param("param0", 0.25).params()[0].value,
             0.25
@@ -408,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn basic_runtime_resolution_and_mouse() {
+    fn basic_runtime_resolucion_y_mouse() {
         let mut rt = BasicRuntime::new(60);
         rt.set_resolution(1920, 1200);
         rt.set_mouse(10.0, 20.0);
