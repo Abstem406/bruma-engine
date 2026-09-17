@@ -1,11 +1,11 @@
-// Triángulo de bienvenida de bruma — Fase 2, paso 1.
+// bruma's welcome triangle — Phase 2, step 1.
 //
-// Sin vértices: el triángulo se genera en el vertex shader a partir de
-// `vertex_index` (técnica "full-screen triangle"). Los colores llegan por
-// interpolación de la coordenada del triángulo.
+// No vertices: the triangle is generated in the vertex shader from
+// `vertex_index` ("full-screen triangle" technique). Colors arrive by
+// interpolation of the triangle coordinate.
 //
-// WGSL es el único lenguaje de shaders del motor (D3): este mismo archivo
-// correrá sin cambios en la galería web (WebGPU) en la Fase 7.
+// WGSL is the engine's only shader language (D3): this same file will
+// run unchanged in the web gallery (WebGPU) in Phase 7.
 
 struct VsOutput {
     @builtin(position) position: vec4<f32>,
@@ -14,7 +14,7 @@ struct VsOutput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
-    // Triángulo que cubre más que la pantalla (clip space).
+    // Triangle covering more than the screen (clip space).
     let positions = array<vec2<f32>, 3>(
         vec2<f32>(-1.0, -3.0),
         vec2<f32>(3.0, 1.0),
@@ -22,11 +22,11 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
     );
     let pos = positions[idx];
 
-    // Colores fijos por vértice, estilo "hola mundo" de gráficas.
+    // Fixed per-vertex colors, graphics "hello world" style.
     let colors = array<vec3<f32>, 3>(
-        vec3<f32>(0.18, 0.20, 0.29), // índigo oscuro
-        vec3<f32>(0.55, 0.30, 0.35), // vino
-        vec3<f32>(0.83, 0.69, 0.44), // arena
+        vec3<f32>(0.18, 0.20, 0.29), // dark indigo
+        vec3<f32>(0.55, 0.30, 0.35), // wine
+        vec3<f32>(0.83, 0.69, 0.44), // sand
     );
     let color = colors[idx];
 

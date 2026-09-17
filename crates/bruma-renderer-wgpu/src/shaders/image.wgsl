@@ -1,9 +1,9 @@
-// Quad con imagen a pantalla completa — Fase 2, paso 2.
+// Fullscreen image quad — Phase 2, step 2.
 //
-// El quad cubre el viewport completo (posiciones en clip space, generadas
-// por vértice_index) y las UV llegan al fragment shader para muestrear la
-// textura de la imagen. La imagen se ESTIRA al tamaño de la pantalla;
-// cover/contain llegarán con el manifiesto de .wallpaper (Fase 4).
+// The quad covers the whole viewport (clip-space positions generated from
+// vertex_index) and the UVs reach the fragment shader to sample the image
+// texture. The image is STRETCHED to the screen size; cover/contain will
+// come with the .wallpaper manifest (pending decision).
 
 struct VsOutput {
     @builtin(position) position: vec4<f32>,
@@ -12,13 +12,13 @@ struct VsOutput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
-    // 4 esquinas en clip space; el orden forma dos triángulos:
-    // (0,1,2) y (2,1,3).
+    // 4 corners in clip space; the order forms two triangles:
+    // (0,1,2) and (2,1,3).
     let positions = array<vec2<f32>, 4>(
-        vec2<f32>(-1.0,  1.0), // arriba-izquierda
-        vec2<f32>( 1.0,  1.0), // arriba-derecha
-        vec2<f32>(-1.0, -1.0), // abajo-izquierda
-        vec2<f32>( 1.0, -1.0), // abajo-derecha
+        vec2<f32>(-1.0,  1.0), // top-left
+        vec2<f32>( 1.0,  1.0), // top-right
+        vec2<f32>(-1.0, -1.0), // bottom-left
+        vec2<f32>( 1.0, -1.0), // bottom-right
     );
     let uvs = array<vec2<f32>, 4>(
         vec2<f32>(0.0, 0.0),
