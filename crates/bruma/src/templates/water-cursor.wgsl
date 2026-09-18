@@ -171,6 +171,21 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(h + 0.5, v + 0.5, 0.5, 1.0);
 }
 
+// AMBIENT WATER — a permanent, time-animated ripple field (two broad
+// crossed sines plus a finer octave, domain-warped so it never reads
+// as a repeating pattern). It feeds the SAME normal the wake uses, so
+// light bands and refraction keep crawling over the whole surface
+// forever: the screen always reads as water, strokes or not. (The
+// previous ambient was a pure brightness modulation — too weak
+// against a detailed photo, which is why the surface seemed to
+// "lose" its water after a while.)
+fn swell(p: vec2<f32>, t: f32) -> f32 {
+    let w1 = sin(p.x * 0.042 + t * 0.9 + sin(p.y * 0.051 + t * 0.6) * 2.4);
+    let w2 = sin(p.y * 0.057 - t * 0.7 + sin(p.x * 0.049 - t * 0.5) * 2.1);
+    let w3 = sin((p.x + p.y) * 0.105 + t * 1.3 + sin(p.x * 0.031 - p.y * 0.026 + t * 0.4) * 1.5);
+    return (w1 + w2) * 0.030 + w3 * 0.016;
+}
+
 // ===== DISPLAY PASS (what the screen shows) =====
 fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     let e = 1.0 / max(u.u_res, vec2<f32>(1.0));
@@ -182,7 +197,7 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     // liquid detail, the broad one the smooth viscous flow of light.
     let e3 = e * 3.0;
     let e9 = e * 9.0;
-    let grad = (
+    let grad_wake = (
         vec2<f32>(
             prev_at(uv + vec2<f32>(e3.x, 0.0)).r - prev_at(uv - vec2<f32>(e3.x, 0.0)).r,
             prev_at(uv + vec2<f32>(0.0, e3.y)).r - prev_at(uv - vec2<f32>(0.0, e3.y)).r,
@@ -192,6 +207,15 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
                 prev_at(uv + vec2<f32>(0.0, e9.y)).r - prev_at(uv - vec2<f32>(0.0, e9.y)).r,
             ) / 18.0
     ) * 0.5;
+    // The ambient ripple field enters through the SAME normal: its
+    // gradient is finite-differenced at the same 3-texel scale as the
+    // fine wake stencil, so both slope sources shade identically.
+    let px = uv * u.u_res;
+    let ga = vec2<f32>(
+        (swell(px + vec2<f32>(3.0, 0.0), u.u_time) - swell(px - vec2<f32>(3.0, 0.0), u.u_time)) / 6.0,
+        (swell(px + vec2<f32>(0.0, 3.0), u.u_time) - swell(px - vec2<f32>(0.0, 3.0), u.u_time)) / 6.0,
+    );
+    let grad = grad_wake + ga * (0.4 + 0.6 * u.u_params.x);
 
     // Cover-fit: fill the screen without distorting the photo.
     let img = textureDimensions(tex0);
@@ -229,17 +253,6 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     let l = normalize(vec3<f32>(-0.4, -0.55, 0.73));
     let diff = clamp(dot(n, l), 0.0, 1.0);
     col *= 0.80 + 0.70 * diff * (0.4 + 0.6 * u.u_params.x);
-
-    // PERMANENT WATER: a slow large-scale swell (two crossing,
-    // time-animated sine waves) keeps the whole surface living — the
-    // screen always reads as water, even between strokes. Subtle by
-    // design; the wake rides on top of it.
-    {
-        let p = uv * u.u_res;
-        let s1 = sin(p.x * 0.011 + u.u_time * 0.9 + sin(p.y * 0.017 + u.u_time * 0.6) * 1.8);
-        let s2 = sin(p.y * 0.009 - u.u_time * 0.7 + sin(p.x * 0.013 - u.u_time * 0.5) * 1.6);
-        col *= 1.0 + (s1 + s2) * 0.018 * (0.4 + 0.6 * u.u_params.x);
-    }
 
     // Scattered light across the disturbed area (the SPREAD term): a
     // gentle cool lift that reaches well past the ring — the "light
