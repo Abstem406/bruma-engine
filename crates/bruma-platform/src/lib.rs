@@ -92,6 +92,13 @@ impl BackgroundWindow {
     pub fn set_fullscreen_pause(&mut self, enabled: bool) {
         self.state.fullscreen_pause = enabled;
     }
+
+    /// Keeps rendering while the machine runs on battery (default:
+    /// pause it — D12's power saving). `--no-battery-pause` / config
+    /// switch it off; the session-lock pause is unaffected.
+    pub fn set_battery_pause(&mut self, enabled: bool) {
+        self.state.pause.set_battery_ignored(!enabled);
+    }
 }
 
 /// Delegated Wayland event state. It owns everything needed to draw, so

@@ -900,3 +900,15 @@ no waves ever form again).
   drop per interval). Faint rings forever; the pond is never dead.
 Test cursor slowed to 800 px/s so the anti-mirror assertion keeps
 measuring what it claims with the widened drop. 52 green.
+
+## 2026-09-17 — Battery pause escape hatch (`--no-battery-pause`)
+User on battery power saw the effect die: D12's global pause (session
+lock OR battery) had frozen the whole engine — by design. The lock
+pause is worth keeping, but a wallpaper the user is actively playing
+with should not die on battery just because the cord is out.
+- PauseFlags gains battery_ignored; the lock cause is never ignorable.
+- Platform: set_battery_pause (symmetric to set_fullscreen_pause).
+- CLI: --no-battery-pause (inverted once by mistake — the API takes
+  "pause enabled", the flag says "disable it"; caught by the log).
+Verified live: on battery (UPower State=2) with the flag, no global
+pause line and the water keeps moving. 52 tests green.

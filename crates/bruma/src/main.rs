@@ -527,6 +527,8 @@ fn run_command(args: &[String]) {
     // wlr-foreign-toplevel), so users who move to an empty workspace
     // and still see a frozen wallpaper need this.
     let mut no_fullscreen_pause = false;
+    // D12's battery escape hatch: keep rendering while discharging.
+    let mut no_battery_pause = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -570,6 +572,7 @@ fn run_command(args: &[String]) {
                 }));
             }
             "--no-fullscreen-pause" => no_fullscreen_pause = true,
+            "--no-battery-pause" => no_battery_pause = true,
             // Phase 3: `--param=0.5` (parameter 0). Phase 4: also
             // `--param=intensidad=0.5` when a manifest provides names.
             p if p.starts_with("--param=") => {
@@ -756,6 +759,9 @@ fn run_command(args: &[String]) {
     window.set_fullscreen_pause(
         !no_fullscreen_pause && cfg.as_ref().is_none_or(|c| c.fullscreen_pause),
     );
+    // Same for the battery pause (render while discharging): the API
+    // takes "pause enabled", the flag says "disable it".
+    window.set_battery_pause(!no_battery_pause);
 
     // Phase 5: the factory builds one renderer PER OUTPUT. The GPU is
     // discovered once (GpuShared clones cheaply); each output gets its own

@@ -39,12 +39,15 @@ pub struct PauseFlags {
     pub session_locked: bool,
     /// On battery (UPower `State == 2`).
     pub on_battery: bool,
+    /// The user disabled the battery pause (`--no-battery-pause`): the
+    /// flag is ignored even while discharging.
+    pub battery_ignored: bool,
 }
 
 impl PauseFlags {
     /// Should the engine pause?
     pub fn any(&self) -> bool {
-        self.session_locked || self.on_battery
+        self.session_locked || (self.on_battery && !self.battery_ignored)
     }
 }
 
@@ -158,6 +161,14 @@ impl SessionPauseWatcher {
         match self.flags.lock() {
             Ok(f) => flags_to_pause(&f),
             Err(_) => false,
+        }
+    }
+
+    /// Ignores the battery flag from now on (`--no-battery-pause`). The
+    /// lock pause keeps working.
+    pub fn set_battery_ignored(&self, ignored: bool) {
+        if let Ok(mut f) = self.flags.lock() {
+            f.battery_ignored = ignored;
         }
     }
 
@@ -383,27 +394,41 @@ mod tests {
         assert!(
             PauseFlags {
                 session_locked: true,
-                on_battery: false
+                on_battery: false,
+                battery_ignored: false
             }
             .any()
         );
         assert!(
             PauseFlags {
                 session_locked: false,
-                on_battery: true
+                on_battery: true,
+                battery_ignored: false
             }
             .any()
         );
+        // The escape hatch: on battery but the user said keep rendering.
+        assert!(
+            !PauseFlags {
+                session_locked: false,
+                on_battery: true,
+                battery_ignored: true
+            }
+            .any()
+        );
+        // The lock pause is NEVER ignorable.
         assert!(
             PauseFlags {
                 session_locked: true,
-                on_battery: true
+                on_battery: true,
+                battery_ignored: true
             }
             .any()
         );
         assert!(flags_to_pause(&PauseFlags {
             session_locked: false,
-            on_battery: true
+            on_battery: true,
+            battery_ignored: false
         }));
         assert!(!flags_to_pause(&PauseFlags::default()));
     }
