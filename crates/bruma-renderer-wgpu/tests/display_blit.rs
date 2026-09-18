@@ -616,6 +616,349 @@ fn render_to_pixels(
     data
 }
 
+/// The FULL production chain on screen — one sim pass into the fp16
+/// state texture, then the display blit to the swapchain format —
+/// rendered once with the cursor at bottom-center and once with the
+/// cursor unknown. The wake must brighten the screen region UNDER the
+/// cursor and leave its vertical mirror untouched (regression for
+/// "the effect is published from the bottom half to the top and vice
+/// versa"). Photo content cancels: both runs show the same image.
+#[test]
+fn wake_follows_the_cursor_on_screen_not_its_mirror() {
+    let Some((device, queue)) = offline_device() else {
+        return;
+    };
+
+    let photo = ImageReader::new(std::io::Cursor::new(LAKE_JPG))
+        .with_guessed_format()
+        .expect("jpg reader")
+        .decode()
+        .expect("embedded jpg decodes")
+        .to_rgba8();
+    let photo_view = create_texture_view(&device, &queue, &photo, photo.dimensions());
+
+    let prev_layout = prev_frame_bind_group_layout(&device);
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+
+    // Calm initial state (h=v=0.5), fp16 exact.
+    let init = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("chain-prev-init"),
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: SIM_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let calm_texels: Vec<u8> =
+        [0x00u8, 0x38, 0x00, 0x38, 0x00, 0x38, 0x00, 0x3C].repeat((W * H) as usize);
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &init,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &calm_texels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(W * 8),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+    );
+    // Pipelines exactly as production builds them.
+    let group0_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("chain-group0"),
+        entries: &[
+            uniform_entry(),
+            texture_entry(1),
+            sampler_entry(2),
+            texture_entry(3),
+            sampler_entry(4),
+            texture_entry(5),
+            sampler_entry(6),
+            texture_entry(7),
+            sampler_entry(8),
+        ],
+    });
+    let combined = format!("{WATER_CURSOR_WGSL}\n{BLIT_DISPLAY_APPEND}");
+    let display_module = compile_wgsl(&device, &combined, "chain-display").expect("combined");
+    let display_pipeline = build_quad_pipeline_entry(
+        &device,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &display_module,
+        &group0_layout,
+        Some(&prev_layout),
+        "fs_display",
+    );
+    let sim_module = compile_wgsl(&device, WATER_CURSOR_WGSL, "chain-sim").expect("sim");
+    let sim_pipeline = build_quad_pipeline_entry(
+        &device,
+        SIM_FORMAT,
+        &sim_module,
+        &group0_layout,
+        Some(&prev_layout),
+        "fs_main",
+    );
+
+    let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("chain-uniforms"),
+        size: 64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    // One dummy 1×1 for the unused texture slots of group 0.
+    let dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("chain-dummy"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // The fp16 state textures (ping-pong): the sim alternates read/write
+    // exactly like the production renderer.
+    let state_desc = wgpu::TextureDescriptor {
+        label: Some("chain-state"),
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: SIM_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    };
+    let states: [wgpu::Texture; 2] = [
+        device.create_texture(&state_desc),
+        device.create_texture(&state_desc),
+    ];
+    let state_views: Vec<wgpu::TextureView> = states
+        .iter()
+        .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
+        .collect();
+    let state_bgs: Vec<wgpu::BindGroup> = state_views
+        .iter()
+        .map(|v| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("chain-state-bg"),
+                layout: &prev_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(v),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            })
+        })
+        .collect();
+
+    // The sRGB screen target.
+    let screen = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("chain-screen"),
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let screen_view = screen.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("chain-readback"),
+        size: (W * 4 * H) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let run = |mouse: [f32; 2], frames: u32| -> Vec<u8> {
+        // Fresh calm state for BOTH buffers: each run starts from still
+        // water (otherwise the second run would inherit the first's
+        // wake and the comparison would be meaningless).
+        for t in &states {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: t,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &calm_texels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * 8),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: W,
+                    height: H,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        write_uniforms(&queue, &uniform_buf, mouse);
+        let g0 = bind_group0(
+            &device,
+            &group0_layout,
+            &uniform_buf,
+            &photo_view,
+            &sampler,
+            &dummy_view,
+        );
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        // The sim evolves over `frames` frames (the cursor keeps
+        // dripping while it hovers), reading one state and writing the
+        // other, then the display blit shows the last state.
+        let mut read = 0usize;
+        for _ in 0..frames {
+            let (target, group1) = (&state_views[1 - read], &state_bgs[read]);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&sim_pipeline);
+            pass.set_bind_group(0, &g0, &[]);
+            pass.set_bind_group(1, group1, &[]);
+            pass.draw(0..4, 0..1);
+            read = 1 - read;
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &screen_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&display_pipeline);
+            pass.set_bind_group(0, &g0, &[]);
+            pass.set_bind_group(1, &state_bgs[read], &[]);
+            pass.draw(0..4, 0..1);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &screen,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * 4),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        rx.recv().unwrap().expect("map");
+        let data = slice.get_mapped_range().unwrap().to_vec();
+        readback.unmap();
+        data
+    };
+
+    // Half a second of dripping at the manifest's 30 fps.
+    let with_wake = run([W as f32 / 2.0, 3.0 * H as f32 / 4.0], 15);
+    let without = run([-1.0, -1.0], 15);
+
+    // Mean |per-pixel change| in a box under the cursor and in its
+    // vertical mirror. Absolute (not signed): the wake's light/dark
+    // BANDS average out to ~0 — their magnitude is the signal. The
+    // mirror only sees the drop's uniform tail (no gradient, no light
+    // bands), so its change must stay far smaller.
+    let box_change = |cy: u32| -> f32 {
+        let (x0, x1) = (W / 2 - 12, W / 2 + 12);
+        let (y0, y1) = (cy - 6, cy + 6);
+        let mut acc = 0.0f32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let o = ((y * W + x) * 4) as usize;
+                for c in 0..3 {
+                    acc += (with_wake[o + c] as f32 - without[o + c] as f32).abs();
+                }
+            }
+        }
+        acc / ((x1 - x0) * (y1 - y0) * 3) as f32
+    };
+    let delta_bottom = box_change(3 * H / 4);
+    let delta_top = box_change(H / 4);
+    assert!(
+        delta_bottom > delta_top * 2.0 + 1.0,
+        "the wake must be under the cursor (Δbottom {delta_bottom:.2}), not in its mirror (Δtop {delta_top:.2})"
+    );
+}
+
 fn offline_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,

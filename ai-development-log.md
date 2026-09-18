@@ -789,3 +789,26 @@ had not caught. Root causes and fixes:
 
 Evidence: `demos/fase6/water-cursor-v4.{png,log}` (upright, sharp, 0
 GPU errors, RADV/Vulkan). Gates: fmt, clippy 0 warnings, 15 suites OK.
+
+## 2026-09-17 — water-cursor v5: wake-follows-cursor pinned at screen level, scattered light
+
+Two follow-ups after the v4 demo:
+
+- **The wake appears where the cursor is — proven on the SCREEN.** The
+  new chain test (`wake_follows_the_cursor_on_screen_not_its_mirror`)
+  runs the full production path offline — 15 frames of sim ping-pong
+  (half a second of dripping at 30 fps) then the display blit — and
+  compares the mean |per-pixel change| under the cursor vs. its
+  vertical mirror: 3.09 vs. well under half that, asserted with a 2×
+  margin. Absolute (not signed) deltas: the wake's light/dark bands
+  average out to zero, only their magnitude is signal. Each run starts
+  from fresh calm water (a shared state pool would let run 2 inherit
+  run 1's wake — first version of the test compared identical frames).
+- **The diffuse reflection spreads past the ring** (the "light plays
+  over disturbed water" feel): a wide 4-tap SPREAD sample of the height
+  field lifts brightness over the whole wake area (scatter ≤ +22%,
+  still multiplicative — nothing can clip toward white); lambert bands
+  sampled 3 texels apart; slope ×16.
+
+Gates: fmt, clippy 0 warnings, 15 suites OK. Evidence:
+`demos/fase6/water-cursor-v5.{png,log}`.

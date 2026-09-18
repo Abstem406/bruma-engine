@@ -120,15 +120,15 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
 // ===== DISPLAY PASS (what the screen shows) =====
 fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     let e = 1.0 / max(u.u_res, vec2<f32>(1.0));
-    // Water slope from the height field, sampled 2 texels apart:
-    // broader, softer light bands (the wake reads as smooth light, not
+    // Water slope from the height field, sampled 3 texels apart:
+    // broad, soft light bands (the wake reads as smooth light, not
     // per-pixel speckle).
-    let e2 = e * 2.0;
-    let hL = prev_at(uv - vec2<f32>(e2.x, 0.0)).r;
-    let hR = prev_at(uv + vec2<f32>(e2.x, 0.0)).r;
-    let hB = prev_at(uv - vec2<f32>(0.0, e2.y)).r;
-    let hU = prev_at(uv + vec2<f32>(0.0, e2.y)).r;
-    let grad = vec2<f32>(hR - hL, hU - hB) * 0.25;
+    let e3 = e * 3.0;
+    let hL = prev_at(uv - vec2<f32>(e3.x, 0.0)).r;
+    let hR = prev_at(uv + vec2<f32>(e3.x, 0.0)).r;
+    let hB = prev_at(uv - vec2<f32>(0.0, e3.y)).r;
+    let hU = prev_at(uv + vec2<f32>(0.0, e3.y)).r;
+    let grad = vec2<f32>(hR - hL, hU - hB) / 6.0;
 
     // Cover-fit: fill the screen without distorting the photo.
     let img = textureDimensions(tex0);
@@ -141,6 +141,18 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
         scale = vec2<f32>(screenAsp / imgAsp, 1.0);
     }
 
+    // SPREAD of the disturbance (wide 4-tap blur of the height field):
+    // light scatters on disturbed water, so the reflection must extend
+    // BEYOND the ring itself — this term lights the whole wake area,
+    // decaying with distance from it.
+    let r = e * 5.0;
+    let spread = (
+        prev_at(uv + vec2<f32>(r.x, 0.0)).r
+            + prev_at(uv - vec2<f32>(r.x, 0.0)).r
+            + prev_at(uv + vec2<f32>(0.0, r.y)).r
+            + prev_at(uv - vec2<f32>(0.0, r.y)).r
+    ) * 0.25 - 0.5;
+
     // Refraction: a few-pixel pull along the slope. Small on purpose:
     // the photo must stay sharp — the effect reads through the LIGHT,
     // not through warping the image into soup.
@@ -149,13 +161,18 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     var col = textureSampleLevel(tex0, samp0, bent, 0.0).rgb;
 
     // DIFFUSE REFLECTION: soft light on a slope-derived normal. The
-    // lambert term MULTIPLIES the photo (0.85..1.35): broad light/shadow
-    // bands slide across the wake and the image keeps all its detail —
-    // nothing clips toward white.
-    let n = normalize(vec3<f32>(grad * 14.0, 1.0));
+    // lambert term MULTIPLIES the photo: broad light/shadow bands slide
+    // across the wake and the image keeps all its detail.
+    let n = normalize(vec3<f32>(grad * 16.0, 1.0));
     let l = normalize(vec3<f32>(-0.4, -0.55, 0.73));
     let diff = clamp(dot(n, l), 0.0, 1.0);
-    col *= 0.78 + 0.55 * diff * (0.4 + 0.6 * u.u_params.x);
+    col *= 0.82 + 0.45 * diff * (0.4 + 0.6 * u.u_params.x);
+
+    // Scattered light across the disturbed area (the SPREAD term): a
+    // gentle cool lift that reaches well past the ring — the "light
+    // plays over the water" feeling.
+    let scatter = clamp(abs(spread) * 8.0, 0.0, 1.0);
+    col *= 1.0 + scatter * 0.22 * (0.4 + 0.6 * u.u_params.x);
 
     // A faint sheen only on the steepest crests, for sparkle.
     let spec = pow(clamp(dot(reflect(-l, n), vec3<f32>(0.0, 0.0, 1.0)), 0.0, 1.0), 40.0);
