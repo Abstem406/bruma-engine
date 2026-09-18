@@ -973,3 +973,18 @@ not as the calm pond the user wants behind the cursor).
   in the display pass (3+9 texel taps) for detail + viscous light flow,
   tighter specular (pow 34) for finer glints.
 52 tests green; demo v22 running.
+
+## 2026-09-18 — The dying layer returns: the V weighting leaked mass
+User hit the "layer disappears after moving" again. My angular-mean-
+1 argument for the directional weighting was INVALID: the hat's whole
+positive lobe sits on the segment (cos b = 1, weight 1+a) while its
+compensating negative ring sits sideways (weight ~0.35) — every stroke
+injected net negative mass, and with the new 7x-longer retention the
+field sank to the clamp and died. Real fix, neutral by construction:
+weight only the POSITIVE lobe by direction (the segment, exactly cosb=1
+region, apex 1.65) and give the negative ring exactly the apex weight —
+positive and negative masses of (q-1)e^-q are equal (1/e * pi*sigma^2
+each), so the stroke integrates to exactly 0 for any geometry. Second
+line of defense: level-drift heal raised 0.08%->0.2% per frame (kills
+any residual bias in ~5 s; invisible as motion). Swell sheen 1.2->1.8%.
+52 tests green; demo v23 running.

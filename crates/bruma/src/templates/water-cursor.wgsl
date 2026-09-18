@@ -142,27 +142,35 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         let hat = (q - 1.0) * exp(-q);
         // Directional weighting — the V is ANCHORED AT THE CURSOR and
         // opens behind the motion. Weight 1 + a*(2*cos^3 b - 1), with b
-        // the angle from the backward axis:
-        //   exactly behind the cursor (b = 0) -> 1 + a   (the apex)
-        //   decaying through the arms        -> the V wedge
-        //   straight ahead (b = 180)         -> 1 - a   (calm water)
-        // The angular mean of the weight is exactly 1 (cosine terms
-        // average to zero over the circle), so the pond's mass balance
-        // survives the anisotropy.
+        // the angle from the backward axis: 1+a exactly behind (the
+        // apex), decaying through the arms, 1-3a ahead (calm water).
+        //
+        // MASS NEUTRALITY, done right: the hat's positive lobe lies ON
+        // the segment (there cosb = 1 exactly, weight 1+a), while its
+        // compensating negative ring lies around it — so weighting the
+        // WHOLE hat by direction would over-weight the positive mass
+        // and sink the pond (a real bug we hit). Fix: weight only the
+        // positive lobe and give the negative ring exactly the apex
+        // weight (1+a). Positive and negative masses of (q-1)e^-q are
+        // equal (1/e of pi*sigma^2 each), so the stroke integrates to
+        // exactly 0 again — for ANY segment geometry.
         let back = -normalize(vec2<f32>(0.0001) + U.u_mouse - U.u_mouse_prev);
         let rel = in.uv * U.u_res - U.u_mouse;
         let cosb = dot(rel / max(length(rel), 0.0001), back);
-        let hat_d = hat * (1.0 + 0.65 * (2.0 * cosb * cosb * cosb - 1.0));
+        let apex = 1.0 + 0.65;
+        let w = 1.0 + 0.65 * (2.0 * cosb * cosb * cosb - 1.0);
+        let hat_d = w * max(hat, 0.0) + apex * min(hat, 0.0);
         // 800 px/s => full strength; scaled by the intensity param.
         let push = min(U.mouse_speed / 800.0, 1.0);
         h += hat_d * 0.30 * push * (0.3 + 0.7 * U.u_params.x);
     }
 
-    // The pond always returns to calm: a very slow pull of the height
-    // toward rest (0) heals any residual level drift. A uniform level
-    // shift makes no gradient, so while it acts the surface looks
-    // still — invisible as motion, decisive for forever-alive water.
-    h -= h * 0.0008;
+    // The pond always returns to calm: a slow pull of the height
+    // toward rest (0) heals any residual level drift long before the
+    // clamp could ever pin the field. A uniform level shift makes no
+    // gradient, so while it acts the surface looks still — invisible
+    // as motion, decisive for forever-alive water.
+    h -= h * 0.002;
 
     // Clamp: a runaway value (driver hiccup) can never poison the
     // field — NaN/Inf would otherwise persist forever.
@@ -239,7 +247,7 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
         let p = uv * u.u_res;
         let s1 = sin(p.x * 0.011 + u.u_time * 0.9 + sin(p.y * 0.017 + u.u_time * 0.6) * 1.8);
         let s2 = sin(p.y * 0.009 - u.u_time * 0.7 + sin(p.x * 0.013 - u.u_time * 0.5) * 1.6);
-        col *= 1.0 + (s1 + s2) * 0.012 * (0.4 + 0.6 * u.u_params.x);
+        col *= 1.0 + (s1 + s2) * 0.018 * (0.4 + 0.6 * u.u_params.x);
     }
 
     // Scattered light across the disturbed area (the SPREAD term): a
