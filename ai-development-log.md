@@ -821,3 +821,22 @@ even when it sits on another workspace, so that output stayed frozen by
 design. Worse, the `--no-fullscreen-pause` flag was parsed but never
 applied. Fix: `BackgroundWindow::set_fullscreen_pause` is now called from
 `bruma run` (flag wins over config `fullscreen_pause`). 52 tests green.
+
+## 2026-09-17 — The effect was invisible, not broken: probe + visible physics
+Systematic diagnosis with a RED/BLUE diagnostic package (mouse-probe):
+the compositor (niri) DOES deliver pointer events to the background
+layer (15 Enters logged), and u_mouse reaches the shader — the whole
+chain works. The real problem: v5's shading produced 1-4% brightness
+deltas (mathematically present, invisible to the eye). Fixes:
+- water-cursor: saturated drop (digs while h > -0.25, x6 stronger,
+  sigma ~40 px), shader gain x3 (lambert 0.80..1.50, refract 0.12,
+  scatter x0.45, spec pow 20 mix 0.25). Defaults intensity 0.8,
+  damping 0.2.
+- platform: pointer position is attributed to the output whose surface
+  the event carries (multi-monitor: the drop no longer appears on both
+  screens); pointer Enter/Leave logged at Info for diagnosis.
+- tests: display_blit canvas 512x320 (the mirror row now sits 4+
+  Gaussian sigmas from the cursor; at 192x120 the correct drop's tail
+  leaked into the mirror assertion — fp16 ULP math confirmed it).
+52 tests green. Proof of the working chain: probe screen turned RED
+(2.3M px) exactly while the cursor was over the background.

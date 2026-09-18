@@ -140,7 +140,9 @@ struct BackgroundState {
     /// Pointer position on the surface it currently hovers (LOGICAL
     /// coordinates), updated from wl_pointer events. `None` = the cursor
     /// is not over any of our surfaces (shaders get (-1, -1) = unknown).
-    mouse: Option<(f64, f64)>,
+    /// Last pointer position: the surface it is over (to attribute the
+    /// coordinates to the right output) plus logical (x, y).
+    mouse: Option<(wayland_client::backend::ObjectId, f64, f64)>,
     /// SCTK seat state: tracks seats and their capabilities; owner of
     /// the wl_pointer objects (bound on the pointer capability).
     seat_state: SeatState,
@@ -566,14 +568,16 @@ impl BackgroundWindow {
                         // Pointer position (Phase 6 `mouse` permission):
                         // BUFFER pixel coordinates (logical position ×
                         // output scale — the same space u_res speaks),
-                        // while the cursor hovers one of our surfaces;
-                        // (-1, -1) = unknown otherwise.
-                        match self.state.mouse {
-                            Some((mx, my)) => {
-                                st.mouse_x = (mx * self.state.outputs[idx].scale as f64) as f32;
-                                st.mouse_y = (my * self.state.outputs[idx].scale as f64) as f32;
+                        // only while the cursor hovers THIS output's
+                        // surface; (-1, -1) = unknown otherwise.
+                        match &self.state.mouse {
+                            Some((surface, mx, my))
+                                if *surface == self.state.outputs[idx].layer.wl_surface().id() =>
+                            {
+                                st.mouse_x = (*mx * self.state.outputs[idx].scale as f64) as f32;
+                                st.mouse_y = (*my * self.state.outputs[idx].scale as f64) as f32;
                             }
-                            None => {
+                            _ => {
                                 st.mouse_x = -1.0;
                                 st.mouse_y = -1.0;
                             }
@@ -1201,9 +1205,19 @@ impl PointerHandler for BackgroundState {
         for event in events {
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.mouse = Some(event.position);
+                    // Enter/Motion only (Motion fires every move: log
+                    // Enter once, at Info, to diagnose compositors that
+                    // never hand pointer events to background layers).
+                    if let PointerEventKind::Enter { .. } = event.kind {
+                        log::info!("pointer ENTERED the background surface");
+                    }
+                    // The event carries ITS surface: remember which
+                    // output the pointer is over (multi-monitor: the
+                    // coordinates are local to that surface, not global).
+                    self.mouse = Some((event.surface.id(), event.position.0, event.position.1));
                 }
                 PointerEventKind::Leave { .. } => {
+                    log::info!("pointer LEFT the background surface");
                     self.mouse = None;
                 }
                 _ => {}

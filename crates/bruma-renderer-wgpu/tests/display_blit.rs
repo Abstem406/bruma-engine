@@ -24,8 +24,14 @@ use image::ImageReader;
 const WATER_CURSOR_WGSL: &str = include_str!("../../bruma/src/templates/water-cursor.wgsl");
 const LAKE_JPG: &[u8] = include_bytes!("../../bruma/src/templates/assets/water-cursor.jpg");
 
-const W: u32 = 192;
-const H: u32 = 120;
+// 512x320: readback rows stay 256-byte aligned at both 4 B (RGBA8:
+// 2048) and 8 B (fp16: 4096) bytes-per-pixel, and the drop's Gaussian
+// (sigma ~ 40 px here) leaves the mirror row (H/4) 4+ sigmas away — the
+// tail there is e^-8, below fp16 precision. At the old 192x120 the
+// mirror sat 1.6 sigmas from the cursor and the (correct) drop's tail
+// leaked into the mirror assertion.
+const W: u32 = 512;
+const H: u32 = 320;
 
 #[test]
 fn display_blit_runs_the_creator_display_and_the_drop_injects() {
@@ -260,7 +266,7 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
     );
     assert!(
         drop_mirror.abs() <= 30,
-        "the ripple landed mirrored into the opposite half (delta {drop_mirror})"
+        "the ripple landed mirrored into the opposite half (mirror {drop_mirror}, at-cursor {drop_here})"
     );
 }
 

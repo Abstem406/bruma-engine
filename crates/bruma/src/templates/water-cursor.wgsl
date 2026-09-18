@@ -101,12 +101,18 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     v *= 0.995 - 0.01 * U.u_params.y; // damping: the wake fades in seconds
     var h = c.r + v;
 
-    // The pointer drips: a wide Gaussian drop wherever the cursor is —
-    // rings that expand outward across the photo.
+    // The pointer drips: a wide, STRONG Gaussian drop wherever the
+    // cursor is — rings that visibly expand across the whole photo.
+    // SATURATED: the drop only digs while the surface is not already
+    // dug past a quarter-depth, so a STILL cursor stops deepening its
+    // dent (a resting finger in water) while moving keeps stirring
+    // fresh calm water at full strength.
     if (U.u_mouse.x >= 0.0) {
         let m = U.u_mouse * e;
         let d = distance(in.uv * U.u_res, m * U.u_res);
-        h += exp(-d * d / 900.0) * -0.06 * (0.3 + 0.7 * U.u_params.x);
+        let gauss = exp(-d * d / 1400.0);
+        let room = select(0.0, 1.0, c.r > -0.25);
+        h += gauss * -0.35 * (0.3 + 0.7 * U.u_params.x) * room;
     }
 
     // Clamp: a runaway value (driver hiccup) can never poison the
@@ -122,7 +128,8 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     let e = 1.0 / max(u.u_res, vec2<f32>(1.0));
     // Water slope from the height field, sampled 3 texels apart:
     // broad, soft light bands (the wake reads as smooth light, not
-    // per-pixel speckle).
+    // per-pixel speckle). Gain ×48: a single-frame cursor drop tilts
+    // the normal ~25° — the light bands are clearly visible.
     let e3 = e * 3.0;
     let hL = prev_at(uv - vec2<f32>(e3.x, 0.0)).r;
     let hR = prev_at(uv + vec2<f32>(e3.x, 0.0)).r;
@@ -153,30 +160,30 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
             + prev_at(uv - vec2<f32>(0.0, r.y)).r
     ) * 0.25 - 0.5;
 
-    // Refraction: a few-pixel pull along the slope. Small on purpose:
-    // the photo must stay sharp — the effect reads through the LIGHT,
-    // not through warping the image into soup.
+    // Refraction: a visible pull along the slope (~2-4 px at 1080p).
+    // The photo stays sharp; the water reads through light + wobble.
     let base = (uv - 0.5) * scale + 0.5;
-    let bent = clamp(base + grad * 0.03, vec2<f32>(0.0), vec2<f32>(1.0));
+    let bent = clamp(base + grad * 0.12, vec2<f32>(0.0), vec2<f32>(1.0));
     var col = textureSampleLevel(tex0, samp0, bent, 0.0).rgb;
 
     // DIFFUSE REFLECTION: soft light on a slope-derived normal. The
-    // lambert term MULTIPLIES the photo: broad light/shadow bands slide
-    // across the wake and the image keeps all its detail.
-    let n = normalize(vec3<f32>(grad * 16.0, 1.0));
+    // lambert term MULTIPLIES the photo (0.80..1.50): broad light/shadow
+    // bands slide across the wake and the image keeps all its detail.
+    let n = normalize(vec3<f32>(grad * 48.0, 1.0));
     let l = normalize(vec3<f32>(-0.4, -0.55, 0.73));
     let diff = clamp(dot(n, l), 0.0, 1.0);
-    col *= 0.82 + 0.45 * diff * (0.4 + 0.6 * u.u_params.x);
+    col *= 0.80 + 0.70 * diff * (0.4 + 0.6 * u.u_params.x);
 
     // Scattered light across the disturbed area (the SPREAD term): a
     // gentle cool lift that reaches well past the ring — the "light
     // plays over the water" feeling.
     let scatter = clamp(abs(spread) * 8.0, 0.0, 1.0);
-    col *= 1.0 + scatter * 0.22 * (0.4 + 0.6 * u.u_params.x);
+    col *= 1.0 + scatter * 0.45 * (0.4 + 0.6 * u.u_params.x);
 
-    // A faint sheen only on the steepest crests, for sparkle.
-    let spec = pow(clamp(dot(reflect(-l, n), vec3<f32>(0.0, 0.0, 1.0)), 0.0, 1.0), 40.0);
-    col = mix(col, vec3<f32>(0.9, 0.94, 1.0), spec * 0.15);
+    // A sheen on the steepest crests, for sparkle (bounded mix: the
+    // rims can never clip to pure white).
+    let spec = pow(clamp(dot(reflect(-l, n), vec3<f32>(0.0, 0.0, 1.0)), 0.0, 1.0), 20.0);
+    col = mix(col, vec3<f32>(0.9, 0.94, 1.0), spec * 0.25);
 
     return vec4<f32>(col, 1.0);
 }
