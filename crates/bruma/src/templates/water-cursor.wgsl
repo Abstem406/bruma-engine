@@ -154,7 +154,15 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         let cosb = dot(rel / max(length(rel), 0.0001), back);
         let hat_d = (1.0 + 0.65 * cosb * cosb * cosb) * hat;
         // 800 px/s => full strength; scaled by the intensity param.
-        let push = min(U.mouse_speed / 800.0, 1.0);
+        // Floor at 15% while there is REAL movement (>5 px/s): slow
+        // drifts must still be visible (a scale-proportional push alone
+        // made slow strokes nearly invisible — "only the first wave
+        // shows"). A truly still cursor (speed ~0) injects nothing.
+        let push = select(
+            0.0,
+            clamp(U.mouse_speed / 800.0, 0.15, 1.0),
+            U.mouse_speed > 5.0,
+        );
         h += hat_d * 0.30 * push * (0.3 + 0.7 * U.u_params.x);
     }
 

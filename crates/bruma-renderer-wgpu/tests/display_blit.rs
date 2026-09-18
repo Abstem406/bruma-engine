@@ -1020,6 +1020,381 @@ fn wake_follows_the_cursor_on_screen_not_its_mirror() {
     );
 }
 
+/// REGRESSION GUARD for "only the first stroke radiates": two identical
+/// strokes with a rest gap between them must radiate comparable energy.
+/// The stroke's injection amplitude is constant per FRAME, so a slow
+/// cursor re-injects on the same texels dozens of times: the field
+/// pins against the ±1 clamp and can no longer accept energy there —
+/// the SECOND stroke then radiates a fraction of the first.
+#[test]
+fn second_stroke_radiates_like_the_first() {
+    let Some((device, queue)) = offline_device() else {
+        return;
+    };
+
+    let photo = ImageReader::new(std::io::Cursor::new(LAKE_JPG))
+        .with_guessed_format()
+        .expect("jpg reader")
+        .decode()
+        .expect("embedded jpg decodes")
+        .to_rgba8();
+    let photo_view = create_texture_view(&device, &queue, &photo, photo.dimensions());
+
+    let prev_layout = prev_frame_bind_group_layout(&device);
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+
+    let init = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("again-prev-init"),
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: SIM_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let calm_texels: Vec<u8> =
+        [0x00u8, 0x38, 0x00, 0x38, 0x00, 0x38, 0x00, 0x3C].repeat((W * H) as usize);
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &init,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &calm_texels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(W * 8),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+    );
+    // `init` seeds both ping-pong buffers to calm via write_texture; no
+    // bind group is needed for it.
+
+    let group0_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("again-group0"),
+        entries: &[
+            uniform_entry(),
+            texture_entry(1),
+            sampler_entry(2),
+            texture_entry(3),
+            sampler_entry(4),
+            texture_entry(5),
+            sampler_entry(6),
+            texture_entry(7),
+            sampler_entry(8),
+        ],
+    });
+    let combined = format!("{WATER_CURSOR_WGSL}\n{BLIT_DISPLAY_APPEND}");
+    let display_module = compile_wgsl(&device, &combined, "again-display").expect("combined");
+    let display_pipeline = build_quad_pipeline_entry(
+        &device,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &display_module,
+        &group0_layout,
+        Some(&prev_layout),
+        "fs_display",
+    );
+    let sim_module = compile_wgsl(&device, WATER_CURSOR_WGSL, "again-sim").expect("sim");
+    let sim_pipeline = build_quad_pipeline_entry(
+        &device,
+        SIM_FORMAT,
+        &sim_module,
+        &group0_layout,
+        Some(&prev_layout),
+        "fs_main",
+    );
+
+    let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("again-uniforms"),
+        size: 80,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("again-dummy"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let state_desc = wgpu::TextureDescriptor {
+        label: Some("again-state"),
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: SIM_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    };
+    let states: [wgpu::Texture; 2] = [
+        device.create_texture(&state_desc),
+        device.create_texture(&state_desc),
+    ];
+    let state_views: Vec<wgpu::TextureView> = states
+        .iter()
+        .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
+        .collect();
+    let state_bgs: Vec<wgpu::BindGroup> = state_views
+        .iter()
+        .map(|v| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("again-state-bg"),
+                layout: &prev_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(v),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            })
+        })
+        .collect();
+
+    let screen = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("again-screen"),
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let screen_view = screen.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("again-readback"),
+        size: (W * 4 * H) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let g0 = bind_group0(
+        &device,
+        &group0_layout,
+        &uniform_buf,
+        &photo_view,
+        &sampler,
+        &dummy_view,
+    );
+
+    let mut read = 0usize;
+    let snap = |device: &wgpu::Device,
+                queue: &wgpu::Queue,
+                read: usize,
+                state_bgs: &[wgpu::BindGroup],
+                readback: &wgpu::Buffer|
+     -> Vec<u8> {
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &screen_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&display_pipeline);
+            pass.set_bind_group(0, &g0, &[]);
+            pass.set_bind_group(1, &state_bgs[read], &[]);
+            pass.draw(0..4, 0..1);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &screen,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * 4),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        rx.recv().unwrap().expect("map");
+        let data = slice.get_mapped_range().unwrap().to_vec();
+        readback.unmap();
+        data
+    };
+
+    // One sim step with the given pointer segment. One submit per step:
+    // every frame's uniforms must reach exactly one pass (batched
+    // writes to the same buffer would collapse to the last).
+    let step = |device: &wgpu::Device,
+                queue: &wgpu::Queue,
+                mouse: [f32; 2],
+                prev: [f32; 2],
+                speed: f32,
+                read: &mut usize| {
+        write_uniforms_prev(queue, &uniform_buf, mouse, prev, speed);
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &state_views[1 - *read],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&sim_pipeline);
+            pass.set_bind_group(0, &g0, &[]);
+            pass.set_bind_group(1, &state_bgs[*read], &[]);
+            pass.draw(0..4, 0..1);
+        }
+        queue.submit(Some(encoder.finish()));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        *read = 1 - *read;
+    };
+
+    let calm_all = |queue: &wgpu::Queue| {
+        for t in &states {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: t,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &calm_texels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * 8),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: W,
+                    height: H,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    };
+
+    // Baseline: calm photo, no wake anywhere.
+    calm_all(&queue);
+    let base = snap(&device, &queue, read, &state_bgs, &readback);
+
+    // A stroke: 110 frames of 3 px/frame (90 px/s at 30 fps) — a SLOW
+    // stroke, the way a cursor drifts: the same texels get re-injected
+    // dozens of frames in a row. Then a 45-frame rest (1.5 s).
+    let stroke = |device: &wgpu::Device, queue: &wgpu::Queue, read: &mut usize| {
+        let mut prev = [100.0f32, 3.0 * H as f32 / 4.0];
+        for i in 1..=110u32 {
+            let x = 100.0 + 3.0 * i as f32;
+            let mouse = [x, 3.0 * H as f32 / 4.0];
+            step(device, queue, mouse, prev, 90.0, read);
+            prev = mouse;
+        }
+        for _ in 0..45 {
+            step(device, queue, [-1.0, -1.0], [-1.0, -1.0], 0.0, read);
+        }
+    };
+
+    let radiated = |a: &[u8], b: &[u8]| -> f32 {
+        a.as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
+            .map(|(p, q)| {
+                (p[0] as f32 - q[0] as f32).abs()
+                    + (p[1] as f32 - q[1] as f32).abs()
+                    + (p[2] as f32 - q[2] as f32).abs()
+            })
+            .sum::<f32>()
+            / (W * H) as f32
+    };
+
+    stroke(&device, &queue, &mut read);
+    let after_first = snap(&device, &queue, read, &state_bgs, &readback);
+    let e1 = radiated(&after_first, &base);
+
+    stroke(&device, &queue, &mut read);
+    let after_second = snap(&device, &queue, read, &state_bgs, &readback);
+    let e2 = radiated(&after_second, &base);
+
+    assert!(
+        e2 > e1 * 0.6,
+        "the second stroke must radiate like the first: E1 {e1:.1}, E2 {e2:.1} — a much smaller E2 means the injection saturates the field and only the first stroke works"
+    );
+}
+
 fn offline_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
