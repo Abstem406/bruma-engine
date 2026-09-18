@@ -136,7 +136,15 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     // the mean back — so after minutes of play the pond would be pinned
     // at the clamp and the wake would die. The hat keeps the level
     // forever stable.
-    if (U.u_mouse.x >= 0.0) {
+    // GATED ON REAL MOVEMENT, not just presence: a resting cursor on
+    // the desktop used to keep relaxing h toward its (shrunken) furrow
+    // — a local sink that ate every ring passing near the cursor, so
+    // the pond looked frozen while the pointer hovered it ("the effect
+    // only plays when I'm in another window": there the background is
+    // pointer-free and evolves free). With the gate, a still cursor is
+    // exactly that: nothing. Movement (speed EMA > 1 px/s) re-opens
+    // the dig.
+    if (U.u_mouse.x >= 0.0 && U.mouse_speed > 1.0) {
         // BOAT-STYLE WAKE. The stem covers the WHOLE segment moved this
         // frame (prev -> mouse) — a point blob makes disconnected
         // circles that cut the trail's continuity. The closest point is
@@ -193,11 +201,12 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         // only when I stop"). At rest push decays with the speed EMA
         // and the furrow closes smoothly behind the stroke.
         let w_vortex = 1.0 + 0.65 * cosb * cosb * cosb;
-        // Depth 0.25 (slow drag) .. 0.55 (fast swipe): the old
-        // per-distance dose dug ~0.4 regardless of speed; pure-speed
-        // scaling left slow strokes with a 0.14 furrow — too dim to
-        // read. The intensity param still scales it for the creator.
-        let furrow = hat * w_vortex * (0.25 + 0.30 * push) * (0.3 + 0.7 * U.u_params.x);
+        // Depth 0.35 (slow drag) .. 0.65 (fast swipe): shed rings must
+        // read at the same scale the release blooms used to (the first
+        // speed-scaled attempt left them 4x dimmer than the visible
+        // release rings of earlier builds — mid-drag energy was present
+        // but under perception). The intensity param still scales it.
+        let furrow = hat * w_vortex * (0.35 + 0.30 * push) * (0.3 + 0.7 * U.u_params.x);
         let dh = (furrow - h) * 0.5;
         h += dh;
         v += dh * 2.0;

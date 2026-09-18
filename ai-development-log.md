@@ -1110,3 +1110,19 @@ cursor and its bright edges buried the tiny shed rings.
 - Removed a duplicated v += dh*2.0 (momentum was applied twice).
 - Halos on release moderated: scatter 0.45 -> 0.22, sheen 0.25 ->
   0.12 (they were sized for the old weak rings).
+
+## 2026-09-18 — Resting cursor was a local sink; dig gated on movement
+
+User: the effect only plays while the pointer is over another window
+(terminal); with the cursor resting ON the background nothing moves.
+
+Explanation: presence alone kept the relaxer active at rest — a local
+sink eating every ring passing near the stationary cursor, freezing
+the pond under it. In another window the background is pointer-free,
+so the pond evolves freely — which looked like the effect only
+working "elsewhere".
+
+- The dig is now gated on the speed EMA (> 1 px/s): a still cursor is
+  pointer-free equivalent; movement re-opens it.
+- Furrow depth raised to 0.35..0.65 so shed rings read at the scale
+  the release blooms used to.
