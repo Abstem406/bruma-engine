@@ -19,6 +19,9 @@ log = "0.4.34"
 # para el manifiesto — cero dependencias nuevas (D8).
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# `bruma params` SIGHUPs the running daemon for live tuning; the
+# platform crate already carries libc for the sigaction side.
+libc = "0.2"
 
 [dev-dependencies]
 # Template validation in tests: same WGSL compiler/validator the engine

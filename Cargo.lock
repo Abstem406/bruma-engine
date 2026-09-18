@@ -74,6 +74,7 @@ dependencies = [
  "bruma-platform",
  "bruma-renderer-wgpu",
  "bruma-runtime",
+ "libc",
  "log",
  "naga",
  "serde",

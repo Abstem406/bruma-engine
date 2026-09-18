@@ -152,6 +152,7 @@
 - GNOME/Mutter remains a v1 non-goal.
 
 ### Phase 6 — Creator tools (partially complete; see breakdown)
+- ✅ Parameter UI (2026-09-18): `bruma params WALLPAPER [list | set NAME VALUE [--adopt] | reset [NAME]] [--output NAME]` — live tuning over an installed wallpaper: reads the manifest with the real parser (unknown names and out-of-range values rejected), persists overrides into `config.json` (per-output or default), SIGHUPs the running daemon and the change is visible instantly (verified on niri: `set intensity 0.9` → `[0.90, ...]` in the daemon log without restart; `--adopt` points a config section at the tuned package so CLI runs can be tuned too). No TUI by design (D8): a scriptable CLI over the config file, zero new dependencies (libc was already in the workspace).
 - ✅ `u_clock`: real local time (h/m/s) in the uniform block — day/night
   tints and clock wallpapers.
 - ✅ `bruma new <name> --template <t>`: scaffolding from zero to an

@@ -24,10 +24,10 @@
 //! Strict errors: unknown field → error (typos in output/param names must
 //! hurt, not be ignored), params out of 0..1 → error.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// What to put on an output (or on all of them, if it's `default`).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputConfig {
     /// Installed package (name or `name:version`).
@@ -52,7 +52,7 @@ impl OutputConfig {
 }
 
 /// Full service configuration.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// What runs on outputs WITHOUT their own entry.

@@ -1169,3 +1169,22 @@ the stamp chain capped at 12 stamps (>144 px/frame left gaps).
   is a DIG (full rate, radiates through the crossing); the lingering
   dent closes via the global heal, which still feeds the release.
 - Stamp cap raised to 64 (768 px/frame cover).
+
+## 2026-09-18 — Phase 6: parameter UI (`bruma params`, live tuning)
+
+The milestone's missing piece: a non-coder tunes a wallpaper. New
+command: `bruma params WALLPAPER [list | set NAME VALUE [--adopt] |
+reset [NAME]] [--output NAME]`.
+
+- Manifest parsed with the real parser: unknown parameter names and
+  out-of-range values are rejected before anything is written.
+- Overrides persist into config.json (default or per-output), with
+  `--adopt` pointing a section at the tuned package (a daemon started
+  with --package switches on the next SIGHUP).
+- SIGHUP wakes the daemon; for CLI runs (--package), a narrow config
+  reloader merges the sections that run that package into a fresh
+  Source (factory rebuilds the renderers with the new overrides; the
+  package never switches underneath).
+- Verified live on niri: set intensity 0.9 → effective params
+  [0.90, ...] in the daemon log within a second, no restart. The
+  user's original config was restored after the demo.

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 mod config;
 mod new;
+mod params;
 
 fn main() {
     // Minimal logging with no dependencies; when the project needs more, a
@@ -28,6 +29,7 @@ fn main() {
         Some("pack") => pack_command(&args.collect::<Vec<_>>()),
         Some("new") => new_command(&args.collect::<Vec<_>>()),
         Some("config") => config_command(&args.collect::<Vec<_>>()),
+        Some("params") => params::params_command(&args.collect::<Vec<_>>()),
         Some("service") => service_command(&args.collect::<Vec<_>>()),
         Some("--version") | Some("-V") | None => {
             println!(
@@ -36,14 +38,14 @@ fn main() {
             );
             if std::env::args().count() == 1 {
                 eprintln!(
-                    "\nUsage: bruma <COMMAND>\n\nCommands:\n  run [options] [color]    Background behind the windows (no flags: uses the config)\n  validate PACKAGE         Validates a .wallpaper file\n  install PACKAGE          Installs a package\n  list                     Lists installed packages\n  pack DIRECTORY           Packs a directory into .wallpaper\n  new NAME [--template T]  Scaffolds a wallpaper package (templates: {} )  \n  config init|show         Creates/shows the persistent config\n  service install|remove   Starts with the session (user service)",
+                    "\nUsage: bruma <COMMAND>\n\nCommands:\n  run [options] [color]    Background behind the windows (no flags: uses the config)\n  validate PACKAGE         Validates a .wallpaper file\n  install PACKAGE          Installs a package\n  list                     Lists installed packages\n  pack DIRECTORY           Packs a directory into .wallpaper\n  new NAME [--template T]  Scaffolds a wallpaper package (templates: {} )  \n  config init|show         Creates/shows the persistent config\n  params WALLPAPER [op]    Live parameter tuning (list | set NAME VALUE | reset)\n  service install|remove   Starts with the session (user service)",
                     new::template_list()
                 );
             }
         }
         Some(other) => {
             eprintln!(
-                "unknown command: {other}\n\nAvailable commands:\n  run | validate | install | list | pack | new | config | service"
+                "unknown command: {other}\n\nAvailable commands:\n  run | validate | install | list | pack | new | config | params | service"
             );
             std::process::exit(2);
         }
@@ -954,6 +956,65 @@ fn run_command(args: &[String]) {
                     )
                 })
                 .collect();
+            true
+        }));
+    } else if explicit_source && package.is_some() {
+        // CLI run (--package): the full config reloader is not
+        // installed, but `bruma params` still needs live tuning. A
+        // narrow one: merge the config sections that run THIS package
+        // (default + per-output matches, output params winning) into a
+        // fresh Source — the factory rebuilds the renderers with the
+        // new overrides. The source NEVER switches package here; if no
+        // section runs the package, the current one stays.
+        let pkg_base = package
+            .as_deref()
+            .expect("checked")
+            .split(':')
+            .next()
+            .expect("nonempty")
+            .to_owned();
+        let cli_named = named_params.clone();
+        let model_h = source_model.clone();
+        window.on_config_reload(Box::new(move || {
+            let Ok(Some(cfg_new)) = config::Config::load() else {
+                return false;
+            };
+            let mut merged = match &cfg_new.default {
+                Some(d)
+                    if d.package
+                        .as_deref()
+                        .is_some_and(|p| p.split(':').next() == Some(pkg_base.as_str())) =>
+                {
+                    d.clone()
+                }
+                _ => config::OutputConfig {
+                    package: Some(pkg_base.clone()),
+                    ..Default::default()
+                },
+            };
+            for s in cfg_new.outputs.values() {
+                if s.package
+                    .as_deref()
+                    .is_some_and(|p| p.split(':').next() == Some(pkg_base.as_str()))
+                {
+                    merged
+                        .params
+                        .extend(s.params.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+            }
+            let mut pkg_cache = Default::default();
+            let mut manifest_fps = None;
+            let mut params = Vec::new();
+            let resolved = resolve_source(
+                &merged,
+                &cli_named,
+                &mut pkg_cache,
+                &mut params,
+                &mut manifest_fps,
+            );
+            let mut m = model_h.borrow_mut();
+            m.default = resolved;
+            m.per_output.clear();
             true
         }));
     }
