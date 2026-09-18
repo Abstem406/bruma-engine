@@ -13,7 +13,8 @@
 //!     "eDP-1":    { "color": "#1d2021" },
 //!     "HDMI-A-1": { "package": "onda-bruma-demo", "params": { "intensidad": 0.3 } }
 //!   },
-//!   "fps": 30
+//!   "fps": 30,
+//!   "fullscreen_pause": true
 //! }
 //! ```
 //!
@@ -62,6 +63,17 @@ pub struct Config {
     /// Global FPS of the animated runtime (the manifest may propose
     /// another; config wins when present).
     pub fps: Option<u32>,
+    /// Pause rendering on an output while a fullscreen window covers it
+    /// (D12's power saving). Default true. Set to false to keep the
+    /// wallpaper alive under fullscreen windows (a fullscreen window on
+    /// ANOTHER workspace also counts as covering — this switch is the
+    /// escape hatch).
+    #[serde(default = "default_true")]
+    pub fullscreen_pause: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Config {
@@ -118,7 +130,8 @@ impl Config {
   "outputs": {
     "eDP-1": { "color": "#1d2021" }
   },
-  "fps": 30
+  "fps": 30,
+  "fullscreen_pause": true
 }
 "##,
         )

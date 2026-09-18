@@ -83,6 +83,17 @@ pub struct BackgroundWindow {
     state: BackgroundState,
 }
 
+impl BackgroundWindow {
+    /// Keeps rendering even when a fullscreen window covers an output
+    /// (default: pause it — D12). A fullscreen window on ANOTHER
+    /// workspace also counts as covering: compositors don't report
+    /// workspaces over this protocol, so this switch is the escape
+    /// hatch. Must be called before `run`/`run_with_runtime`.
+    pub fn set_fullscreen_pause(&mut self, enabled: bool) {
+        self.state.fullscreen_pause = enabled;
+    }
+}
+
 /// Delegated Wayland event state. It owns everything needed to draw, so
 /// handlers can repaint directly.
 struct BackgroundState {
@@ -111,6 +122,9 @@ struct BackgroundState {
     /// Last pause state per output (index into the outputs Vec): so we
     /// log transitions only, not every frame.
     last_pause: Vec<bool>,
+    /// Pause rendering on outputs covered by a fullscreen window (D12,
+    /// default true; `--no-fullscreen-pause` / config switch it off).
+    fullscreen_pause: bool,
     /// Global pause (D12): session lock and battery, best-effort over the
     /// system D-Bus. Without a bus, never pauses.
     pause: pause::SessionPauseWatcher,
@@ -327,6 +341,7 @@ impl BackgroundWindow {
                 toplevel: toplevel::ToplevelTracker::disabled(),
                 _toplevel_manager: toplevel_mgr,
                 last_pause: Vec::new(),
+                fullscreen_pause: true,
                 pause: pause::SessionPauseWatcher::new(),
                 last_global_pause: false,
                 hup: hup::HupChannel::install().ok(),
@@ -563,10 +578,11 @@ impl BackgroundWindow {
                                 st.mouse_y = -1.0;
                             }
                         }
-                        let fullscreened = self.state.outputs[idx]
-                            .output
-                            .as_ref()
-                            .is_some_and(|o| self.state.toplevel.is_fullscreen_on(o));
+                        let fullscreened = self.state.fullscreen_pause
+                            && self.state.outputs[idx]
+                                .output
+                                .as_ref()
+                                .is_some_and(|o| self.state.toplevel.is_fullscreen_on(o));
                         // Diagnostics: log only on transition (not per
                         // frame).
                         if self

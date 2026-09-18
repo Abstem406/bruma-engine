@@ -36,7 +36,7 @@ fn main() {
             );
             if std::env::args().count() == 1 {
                 eprintln!(
-                    "\nUsage: bruma <COMMAND>\n\nCommands:\n  run [options] [color]    Background behind the windows (no flags: uses the config)\n  validate PACKAGE         Validates a .wallpaper file\n  install PACKAGE          Installs a package\n  list                     Lists installed packages\n  pack DIRECTORY           Packs a directory into .wallpaper\n  new NAME [--template T]  Scaffolds a wallpaper package (templates: {} )\n  config init|show         Creates/shows the persistent config\n  service install|remove   Starts with the session (user service)",
+                    "\nUsage: bruma <COMMAND>\n\nCommands:\n  run [options] [color]    Background behind the windows (no flags: uses the config)\n  validate PACKAGE         Validates a .wallpaper file\n  install PACKAGE          Installs a package\n  list                     Lists installed packages\n  pack DIRECTORY           Packs a directory into .wallpaper\n  new NAME [--template T]  Scaffolds a wallpaper package (templates: {} )  \n  config init|show         Creates/shows the persistent config\n  service install|remove   Starts with the session (user service)",
                     new::template_list()
                 );
             }
@@ -521,6 +521,12 @@ fn run_command(args: &[String]) {
     let mut param0: Option<f32> = None;
     let mut named_params: Vec<(String, f32)> = Vec::new();
     let mut config_path: Option<String> = None;
+    // Disable the fullscreen pause (D12): keep rendering under
+    // fullscreen windows. A fullscreen window on ANOTHER workspace also
+    // counts as covering (compositors don't report workspaces over
+    // wlr-foreign-toplevel), so users who move to an empty workspace
+    // and still see a frozen wallpaper need this.
+    let mut no_fullscreen_pause = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -563,6 +569,7 @@ fn run_command(args: &[String]) {
                     std::process::exit(2);
                 }));
             }
+            "--no-fullscreen-pause" => no_fullscreen_pause = true,
             // Phase 3: `--param=0.5` (parameter 0). Phase 4: also
             // `--param=intensidad=0.5` when a manifest provides names.
             p if p.starts_with("--param=") => {
@@ -744,6 +751,11 @@ fn run_command(args: &[String]) {
             eprintln!("error: {e}");
             std::process::exit(1);
         });
+    // D12's escape hatch: disable the fullscreen pause (flag, or config
+    // "fullscreen_pause": false — the flag wins).
+    window.set_fullscreen_pause(
+        !no_fullscreen_pause && cfg.as_ref().is_none_or(|c| c.fullscreen_pause),
+    );
 
     // Phase 5: the factory builds one renderer PER OUTPUT. The GPU is
     // discovered once (GpuShared clones cheaply); each output gets its own

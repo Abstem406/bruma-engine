@@ -812,3 +812,12 @@ Two follow-ups after the v4 demo:
 
 Gates: fmt, clippy 0 warnings, 15 suites OK. Evidence:
 `demos/fase6/water-cursor-v5.{png,log}`.
+
+## 2026-09-17 — Fullscreen pause escape hatch wired (`--no-fullscreen-pause`)
+User could not see the water-cursor effect while switching workspaces.
+Diagnosis: the D12 fullscreen pause does not track workspaces —
+wlr-foreign-toplevel reports a fullscreen window (Sniper3) on the output
+even when it sits on another workspace, so that output stayed frozen by
+design. Worse, the `--no-fullscreen-pause` flag was parsed but never
+applied. Fix: `BackgroundWindow::set_fullscreen_pause` is now called from
+`bruma run` (flag wins over config `fullscreen_pause`). 52 tests green.
