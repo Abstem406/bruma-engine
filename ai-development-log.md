@@ -1012,3 +1012,12 @@ any residual bias in ~5 s; invisible as motion). Swell sheen 1.2->1.8%.
   (original saved at /tmp/water-cursor-original.jpg; restore after).
   On black the ambient swell finally becomes visible: a faint breathing
   web of light — the pond itself, previously invisible against photos.
+
+## 2026-09-18 — ambient swell: crossed sines -> warped value noise
+
+- User's black-background screenshot showed the wake beautifully (V
+  ribbons of light) but exposed the ambient as a regular diagonal dot
+  lattice — three crossed sines form a visible moire grid. Replaced
+  with value-noise FBM + domain warp (fog template's technique): no
+  lattice possible, curls and pinches like real water, still drifting
+  over tens of seconds (pond, not stream).

@@ -183,16 +183,40 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(h + 0.5, v + 0.5, 0.5, 1.0);
 }
 
-// AMBIENT WATER — a permanent, STANDING ripple field (three broad
-// crossed waves, barely drifting over tens of seconds): a calm pond
-// breathing, not running water. Its gradient feeds the SAME normal the
-// wake uses, so the surface always reads as water. The `ambient`
-// parameter scales it (0 = still pond between strokes).
+// AMBIENT WATER — a permanent, ORGANIC ripple field: value-noise FBM
+// with domain warping, drifting slowly. A calm pond breathing, not
+// running water. (Three crossed sines were tried first: over a dark
+// background they read as a regular diagonal lattice of dots — the
+// math showing through. Warped noise cannot form a lattice.) Its
+// gradient feeds the SAME normal the wake uses, so both shade
+// identically. The `ambient` parameter scales it (0 = still pond
+// between strokes).
+fn hash(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+}
+
+fn value_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash(i);
+    let b = hash(i + vec2<f32>(1.0, 0.0));
+    let c = hash(i + vec2<f32>(0.0, 1.0));
+    let d = hash(i + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
 fn swell(p: vec2<f32>, t: f32) -> f32 {
-    let w1 = sin(p.x * 0.028 + sin(p.y * 0.041) * 2.4 + t * 0.15);
-    let w2 = sin(p.y * 0.037 + sin(p.x * 0.033) * 2.1 - t * 0.12);
-    let w3 = sin((p.x + p.y) * 0.072 + sin(p.x * 0.021 - p.y * 0.017) * 1.5 + t * 0.18);
-    return (w1 + w2) * 0.030 + w3 * 0.016;
+    // Domain warp: the sample position is displaced by two other noise
+    // lookups, so the ripples curl and pinch like real water instead of
+    // following a wave vector. Drifts are tuned to tens of seconds —
+    // a pond, not a stream.
+    let q = vec2<f32>(
+        value_noise(p * 0.004 + vec2<f32>(0.0, t * 0.03)),
+        value_noise(p * 0.004 + vec2<f32>(5.2, -t * 0.026)),
+    );
+    let w = value_noise(p * 0.011 + 3.5 * q + vec2<f32>(t * 0.05, -t * 0.04));
+    return (w - 0.5) * 0.12;
 }
 
 // ===== DISPLAY PASS (what the screen shows) =====
