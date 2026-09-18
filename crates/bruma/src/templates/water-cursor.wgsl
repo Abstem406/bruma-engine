@@ -179,45 +179,37 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
             clamp(U.mouse_speed / 450.0, 0.35, 1.0),
             U.mouse_speed > 1.0,
         );
-        // CARVE, DON'T PILE. Additive kicks (height OR velocity) under
-        // a sustained same-sign push converge to a flat plateau pinned
-        // at the clamp — measured: after one stroke its own corridor
-        // peaked AT the clamp (84% pinned), and a re-stroke over the
-        // same path changed the state by <1%: "only the first wave
-        // works". So the pointer never ADDS: it RELAXES the height
-        // toward a furrow of fixed depth (a finger dragged through
-        // water digs a bounded trough). That is a contraction toward a
-        // bounded, mass-zero target — saturation is impossible by
-        // construction — and over an old ribbon the relaxation drags
-        // the pinned water BACK toward the furrow, a huge visible
-        // change: a fresh wave radiates on every pass, however many
-        // strokes crossed here already. Dose follows the distance
-        // crossed this frame (a resting finger digs nothing; a slow
-        // drag digs gently).
-        let seg = length(ab);
-        let dig = min(seg * 0.006, 0.35) * push * (0.3 + 0.7 * U.u_params.x);
+        // FURROW FOLLOWS THE FINGER. Additive schemes pinned the clamp
+        // (measured: 84% of the corridor frozen at |h|=1 after one
+        // stroke — "only the first wave works"), so the pointer never
+        // ADDS: the height RELAXES toward a bounded, mass-zero furrow.
+        // Depth scales with REAL speed (a fast finger displaces more
+        // water per second) and delivery is prompt (rate 0.5): the dent
+        // tracks the cursor instead of accumulating behind it over ~20
+        // frames — that per-frame delta onto FRESH texels IS the shed
+        // wave, rings break off continuously WHILE moving (the old
+        // per-distance dose fed the furrow at 0.0025/frame: the
+        // groove's bright edges buried the tiny shed rings — "waves
+        // only when I stop"). At rest push decays with the speed EMA
+        // and the furrow closes smoothly behind the stroke.
         let w_vortex = 1.0 + 0.65 * cosb * cosb * cosb;
-        let dh = (hat * w_vortex * 0.4 - h) * dig;
+        // Depth 0.25 (slow drag) .. 0.55 (fast swipe): the old
+        // per-distance dose dug ~0.4 regardless of speed; pure-speed
+        // scaling left slow strokes with a 0.14 furrow — too dim to
+        // read. The intensity param still scales it for the creator.
+        let furrow = hat * w_vortex * (0.25 + 0.30 * push) * (0.3 + 0.7 * U.u_params.x);
+        let dh = (furrow - h) * 0.5;
         h += dh;
         v += dh * 2.0;
-        // MOMENTUM = the carve's own delta. Two measured defects of
-        // fancier couplings, both fixed by transmitting dh itself:
-        //  - v-contraction toward a fixed kick target fought the carve
-        //    (h* = target + v/dig exceeded the clamp on slow strokes:
-        //    the corridor pinned at 1.000 again);
-        //  - the same line with target ≈ 0 outside the hat was a
-        //    global damper eating in-flight rings ("waves appear only
-        //    when I stop the mouse" — mid-drag radiation measured 15%).
-        // dh is nonzero ONLY where the finger is actively changing the
-        // field: it delivers the impulse while the stroke passes (the
-        // mid-motion harness enforces ≥15% radiated mid-drag), stops
-        // the instant the furrow is reached (no accumulation, no
-        // fighting — h at target means dh = 0), and hits hardest when
-        // re-carving an old ribbon (h far from target). Gain 2: the
-        // transmitted impulse exceeds the height delta (louder rings
-        // while dragging) but stays bounded — dh vanishes at the
-        // furrow, so nothing can accumulate.
-        v += dh * 2.0;
+        // MOMENTUM = the carve's own delta (gain 2). dh is nonzero
+        // only where the finger is actively changing the field: it
+        // delivers the impulse while the stroke passes, stops the
+        // instant the furrow is reached (no accumulation, no fighting
+        // — h at target means dh = 0), and hits hardest when
+        // re-carving an old ribbon (h far from target). (Two fancier
+        // couplings were measured and rejected: fixed-kick targets
+        // pinned the clamp on slow strokes; rate=dig delivered too
+        // little mid-drag.)
     }
 
     // The pond always returns to calm: a LINEAR pull of the height
@@ -404,12 +396,12 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     // gentle cool lift that reaches well past the ring — the "light
     // plays over the water" feeling.
     let scatter = clamp(abs(spread) * 8.0, 0.0, 1.0);
-    col *= 1.0 + scatter * 0.45 * (0.4 + 0.6 * u.u_params.x);
+    col *= 1.0 + scatter * 0.22 * (0.4 + 0.6 * u.u_params.x);
 
     // A sheen on the steepest crests, for sparkle (bounded mix: the
     // rims can never clip to pure white).
     let spec = pow(clamp(dot(reflect(-l, n), vec3<f32>(0.0, 0.0, 1.0)), 0.0, 1.0), 34.0);
-    col = mix(col, vec3<f32>(0.9, 0.94, 1.0), spec * 0.25);
+    col = mix(col, vec3<f32>(0.9, 0.94, 1.0), spec * 0.12);
 
     return vec4<f32>(col, 1.0);
 }

@@ -1094,3 +1094,19 @@ Two couplings tried and rejected with numbers:
   not scale (v limiter saturates).
 
 The two-stroke test now also asserts mid-motion radiation >= 15%.
+
+## 2026-09-18 — Furrow follows the finger: rings shed WHILE dragging
+
+User: still no waves while moving; extra effects around the wave on
+release. The harness exposed the scale gap: the per-distance dose fed
+the furrow at 0.0025/frame, so the groove formed ~20 frames behind the
+cursor and its bright edges buried the tiny shed rings.
+
+- Depth now scales with REAL speed (0.25 slow .. 0.55 fast) with
+  prompt delivery (rate 0.5): the dent tracks the cursor, and the
+  per-frame delta onto fresh texels IS the shed wave — rings break
+  off continuously mid-drag. Measured: 65% of the stroke's energy
+  radiates while moving (was 15%).
+- Removed a duplicated v += dh*2.0 (momentum was applied twice).
+- Halos on release moderated: scatter 0.45 -> 0.22, sheen 0.25 ->
+  0.12 (they were sized for the old weak rings).
