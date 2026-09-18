@@ -265,6 +265,16 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     let diff = clamp(dot(n, l), 0.0, 1.0);
     col *= 0.80 + 0.70 * diff * (0.4 + 0.6 * u.u_params.x);
 
+    // ADDITIVE light on disturbed water: reflection ADDS light instead
+    // of only modulating the photo — multiplication alone can never
+    // brighten pure black, and on a dark photo the wake would vanish.
+    // Rides the same slope as the diffuse bands (flat calm water adds
+    // nothing); scaled by intensity like every other term.
+    let slope = length(grad);
+    col += vec3<f32>(0.45, 0.55, 0.65)
+        * min(slope * 10.0, 1.0)
+        * (0.4 + 0.6 * u.u_params.x);
+
     // Scattered light across the disturbed area (the SPREAD term): a
     // gentle cool lift that reaches well past the ring — the "light
     // plays over the water" feeling.

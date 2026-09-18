@@ -1001,3 +1001,14 @@ any residual bias in ~5 s; invisible as motion). Swell sheen 1.2->1.8%.
 - Pack pipeline gotchas re-learned: scaffold id comes from `title`
   slug (directory name leaked into title); install path is
   ~/.local/share/bruma/wallpapers/<id>/<ver>/main.wgsl.
+
+## 2026-09-18 — black-background test mode + additive light
+
+- User asked for a black background to isolate the wake test. Pure
+  multiplicative shading can NEVER light black, so the template gained
+  an ADDITIVE term on disturbed water (slope-gated, cool tint): the
+  wake now reads on dark/night photos too — a real gap this exposed.
+- Test artifact: installed package's texture swapped to solid black
+  (original saved at /tmp/water-cursor-original.jpg; restore after).
+  On black the ambient swell finally becomes visible: a faint breathing
+  web of light — the pond itself, previously invisible against photos.
