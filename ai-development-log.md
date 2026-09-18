@@ -936,3 +936,18 @@ NOT in the mirrored half — they caught the bug and pin the contract.
 52 tests green. Note: one isolated heap-corruption abort inside wgpu
 (EncoderInFlight drop) after minutes of pointer churn — logged, not yet
 reproduced; watch if it recurs.
+
+## 2026-09-18 — Boat-style directional wake + permanent water sheen
+User request: the trail should open opposite to the motion (a boat's V)
+instead of a symmetric blob, and the surface should always read as water.
+Implementation, both in the water-cursor template only:
+1. Directional hat: the mass-neutral Mexican hat is weighted by
+   (1 + 0.9 * cos-to-back) around the cursor — texels behind the motion
+   get ~2x, ahead almost nothing. The angular mean stays 1, so the
+   mass balance that fixed the dying pond survives the anisotropy; the
+   trail now reads as a V pointing opposite to travel.
+2. Permanent water: a slow two-wave swell multiplies the photo by
+   +/-1.2% continuously (time-animated, large scale) — the screen is
+   never a still photo between strokes; ambient drops stay on top.
+52 tests green (naga caught a max(f32, vec2) typo — fixed). Demo v20
+running with the directional wake installed.

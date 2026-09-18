@@ -1,8 +1,9 @@
-// Calm water following the cursor — template (feedback + mouse).
+// Calm water with a boat-style V wake — template (feedback + mouse).
 //
 // A real water SIMULATION: a height field that ripples where the pointer
 // moves, propagates on its own and settles back to calm in a few
-// seconds. The photo is re-drawn with DIFFUSE REFLECTION — broad, soft
+// seconds. The wake opens BEHIND the motion (a boat's V), lighting up
+// the surface. The photo is re-drawn with DIFFUSE REFLECTION — broad, soft
 // bands of light that smear across the wake (the "calm water" look) —
 // plus a gentle specular sheen on the steepest ripples.
 //
@@ -41,8 +42,8 @@ struct Uniforms {
     // vec2 needs 8-byte alignment: the clock ends at 60, so this pad
     // holds u_mouse_prev at 64 (the engine writes it there).
     _pad60: f32,
-    // Previous frame's cursor position: the wake is injected along the
-    // moved segment (prev -> mouse), one continuous stroke.
+    // Previous frame's cursor position: the wake's stem follows the
+    // moved segment (prev -> mouse), one continuous V trail.
     u_mouse_prev: vec2<f32>,
 }
 
@@ -126,24 +127,30 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     // at the clamp and the wake would die. The hat keeps the level
     // forever stable.
     if (U.u_mouse.x >= 0.0) {
-        // The stroke covers the WHOLE segment moved this frame:
-        // distance from the texel to the segment prev->mouse (the
-        // brush-stroke trick). A point blob makes circles that repeat
-        // per position and cut the wake's continuity; a segment
-        // injection draws ONE continuous trail behind the cursor.
+        // BOAT-STYLE V WAKE. The stem covers the WHOLE segment moved
+        // this frame (prev -> mouse) — a point blob makes disconnected
+        // circles that cut the trail's continuity; the segment keeps it
+        // ONE continuous trail. The mass-neutral hat (integrates to
+        // exactly 0) keeps the pond's level forever stable.
         let a = min(U.u_mouse_prev, U.u_mouse);
         let b = max(U.u_mouse_prev, U.u_mouse);
         let ab = max(b - a, vec2<f32>(0.0001));
         let p = clamp(in.uv * U.u_res, a, b);
         let d = distance(in.uv * U.u_res, p);
-        let sig2 = 1400.0;
-        let q = d * d / sig2;
-        // (q - 1) * e^-q integrates to exactly 0 over the plane: the
-        // stroke's dent is paid by the water it raises around it.
+        let q = d * d / 2000.0;
         let hat = (q - 1.0) * exp(-q);
+        // Directional weighting — the wake opens BEHIND the motion:
+        // texels behind the cursor's path get ~2x the hat, texels ahead
+        // almost nothing (cosine weight over the full circle keeps the
+        // angular mean at 1, so mass balance survives the anisotropy).
+        // The trail reads as a V pointing opposite to the travel.
+        let back = -normalize(vec2<f32>(0.0001) + U.u_mouse - U.u_mouse_prev);
+        let rel = in.uv * U.u_res - U.u_mouse;
+        let behind = dot(rel / max(length(rel), 0.0001), back);
+        let hat_d = hat * (1.0 + 0.9 * behind);
         // 800 px/s => full strength; scaled by the intensity param.
         let push = min(U.mouse_speed / 800.0, 1.0);
-        h += hat * 0.26 * push * (0.3 + 0.7 * U.u_params.x);
+        h += hat_d * 0.24 * push * (0.3 + 0.7 * U.u_params.x);
     }
 
     // Ambient life: three random drops every 0.4 s (~7.5 drops/s) at
@@ -157,7 +164,7 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
             let r2 = fract(sin(s * 269.5) * 18343.8235);
             let d = distance(in.uv * U.u_res, vec2<f32>(r1, r2) * U.u_res);
             let q = d * d / 1100.0;
-            h += (q - 1.0) * exp(-q) * 0.16;
+            h += (q - 1.0) * exp(-q) * 0.22;
         }
     }
 
@@ -180,8 +187,8 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     let e = 1.0 / max(u.u_res, vec2<f32>(1.0));
     // Water slope from the height field, sampled 3 texels apart:
     // broad, soft light bands (the wake reads as smooth light, not
-    // per-pixel speckle). Gain ×48: a single-frame cursor drop tilts
-    // the normal ~25° — the light bands are clearly visible.
+    // per-pixel speckle). Gain ×48 tilts the normal hard enough for
+    // clearly visible light bands.
     let e3 = e * 3.0;
     let hL = prev_at(uv - vec2<f32>(e3.x, 0.0)).r;
     let hR = prev_at(uv + vec2<f32>(e3.x, 0.0)).r;
@@ -225,6 +232,17 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     let l = normalize(vec3<f32>(-0.4, -0.55, 0.73));
     let diff = clamp(dot(n, l), 0.0, 1.0);
     col *= 0.80 + 0.70 * diff * (0.4 + 0.6 * u.u_params.x);
+
+    // PERMANENT WATER: a slow large-scale swell (two crossing,
+    // time-animated sine waves) keeps the whole surface living — the
+    // screen always reads as water, even between strokes. Subtle by
+    // design; the wake rides on top of it.
+    {
+        let p = uv * u.u_res;
+        let s1 = sin(p.x * 0.011 + u.u_time * 0.9 + sin(p.y * 0.017 + u.u_time * 0.6) * 1.8);
+        let s2 = sin(p.y * 0.009 - u.u_time * 0.7 + sin(p.x * 0.013 - u.u_time * 0.5) * 1.6);
+        col *= 1.0 + (s1 + s2) * 0.012 * (0.4 + 0.6 * u.u_params.x);
+    }
 
     // Scattered light across the disturbed area (the SPREAD term): a
     // gentle cool lift that reaches well past the ring — the "light
