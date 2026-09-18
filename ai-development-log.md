@@ -1043,3 +1043,19 @@ stroke lands on stone. Fix in water-cursor.wgsl:
 - The regression guard now asserts the real contract: re-stroke radiates
   ≥25% of the first stroke's energy (E2 9.4 / E1 30.1 measured, clearly
   visible in additive light) and the corridor never pins at the clamp.
+
+## 2026-09-18 — Propagation ×4, momentum contraction, user-flagged wake defects
+
+User screenshot: red-circled interference knots along the wake (ambient
+swell beating against it), strokes that "try to radiate and fade before
+spreading", and a request for a static solid background while testing.
+
+- Root cause of dead propagation: the 5-point stencil advances ~0.7
+  TEXELS/frame — at full-res ~21 px/s, a ring needs ~90 s to cross the
+  screen. Stencil spacing now ×4 (Laplacian /16, same Courant 0.49):
+  ~84 px/s, rings visibly expand.
+- Momentum: v-relaxation toward the streaming kick (same contraction
+  trick as the carve — additive impulses had accumulated to the knee in
+  every previous attempt). Dose = dig rate, per distance crossed.
+- Demo runs with ambient=0 over the black texture: solid static
+  background, wake is the only motion, per the user's testing request.

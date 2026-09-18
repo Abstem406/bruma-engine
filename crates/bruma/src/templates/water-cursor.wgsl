@@ -101,17 +101,24 @@ fn prev_at(uv: vec2<f32>) -> vec2<f32> {
 @fragment
 fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     let e = 1.0 / max(U.u_res, vec2<f32>(1.0));
+    // SPACED STENCIL (4 texels): the classic 5-point Laplacian propagates
+    // sqrt(c²) ≈ 0.7 TEXELS per frame — at full-res that is ~21 px/s: a
+    // ring needs ~90 s to cross the screen, so waves died where they were
+    // born ("it tries to radiate and fades before spreading"). Sampling
+    // the neighbors 4 texels out scales the cell size ×4: ~84 px/s, a
+    // ring visibly expands and crosses the screen in ~20 s. The Laplacian
+    // divides by the squared spacing (4² = 16) and the Courant number
+    // stays at 0.49 (same stability bound).
+    let s = e * 4.0;
     let c = prev_at(in.uv) - vec2<f32>(0.5);
-    let sum = (prev_at(in.uv + vec2<f32>(e.x, 0.0)).r - 0.5)
-            + (prev_at(in.uv - vec2<f32>(e.x, 0.0)).r - 0.5)
-            + (prev_at(in.uv + vec2<f32>(0.0, e.y)).r - 0.5)
-            + (prev_at(in.uv - vec2<f32>(0.0, e.y)).r - 0.5);
+    let sum = (prev_at(in.uv + vec2<f32>(s.x, 0.0)).r - 0.5)
+            + (prev_at(in.uv - vec2<f32>(s.x, 0.0)).r - 0.5)
+            + (prev_at(in.uv + vec2<f32>(0.0, s.y)).r - 0.5)
+            + (prev_at(in.uv - vec2<f32>(0.0, s.y)).r - 0.5);
 
     // Wave equation: velocity toward the neighborhood, height follows.
-    // Courant limit for this stencil is c^2 <= 0.5; 0.49 sends the
-    // rings across the whole screen in ~1.5 s and they reach far
-    // before dying.
-    var v = c.g + (sum - 4.0 * c.r) * 0.49;
+    // Courant limit for this stencil is c^2 <= 0.5; 0.49 keeps it stable.
+    var v = c.g + (sum - 4.0 * c.r) * (0.49 / 16.0);
     // Damping: the wake lingers for a long time (0.05%/frame of
     // velocity loss at damping 0 — rings cross the screen and back
     // before they die); the param shortens it on demand.
@@ -182,7 +189,19 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         let seg = length(ab);
         let dig = min(seg * 0.006, 0.35) * push * (0.3 + 0.7 * U.u_params.x);
         let w_vortex = 1.0 + 0.65 * cosb * cosb * cosb;
-        h += (hat * w_vortex * 0.4 - h) * dig;
+        let dh = (hat * w_vortex * 0.4 - h) * dig;
+        h += dh;
+        // MOMENTUM, same trick as the carve: v RELAXES toward the
+        // streaming kick instead of receiving additive kicks per frame
+        // (four additive schemes measured: any per-frame add over the
+        // same texels accumulates into the clamp — plateau, dead
+        // waves). A contraction toward a bounded target cannot
+        // accumulate: while the finger is over a texel v sits at the
+        // kick, and the moment it moves on the wave equation takes
+        // that momentum and radiates it as a free ring. Rate = dig
+        // (dose per distance): slow drifts barely stir, fast strokes
+        // kick hard — a real finger in water.
+        v += (hat * w_vortex * 0.5 - v) * dig;
     }
 
     // The pond always returns to calm: a LINEAR pull of the height
