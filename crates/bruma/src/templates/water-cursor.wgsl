@@ -128,38 +128,29 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     // at the clamp and the wake would die. The hat keeps the level
     // forever stable.
     if (U.u_mouse.x >= 0.0) {
-        // BOAT-STYLE V WAKE. The stem covers the WHOLE segment moved
-        // this frame (prev -> mouse) — a point blob makes disconnected
-        // circles that cut the trail's continuity; the segment keeps it
-        // ONE continuous trail. The mass-neutral hat (integrates to
-        // exactly 0) keeps the pond's level forever stable.
-        let a = min(U.u_mouse_prev, U.u_mouse);
-        let b = max(U.u_mouse_prev, U.u_mouse);
-        let ab = max(b - a, vec2<f32>(0.0001));
-        let p = clamp(in.uv * U.u_res, a, b);
-        let d = distance(in.uv * U.u_res, p);
-        let q = d * d / 1000.0;
+        // BOAT-STYLE WAKE. The stem covers the WHOLE segment moved this
+        // frame (prev -> mouse) — a point blob makes disconnected
+        // circles that cut the trail's continuity. The closest point is
+        // a true PROJECTION onto the segment: clamping per-component to
+        // the bounding box painted SQUARES on diagonal moves.
+        let px = in.uv * U.u_res;
+        let ab = U.u_mouse - U.u_mouse_prev;
+        let t = clamp(dot(px - U.u_mouse_prev, ab) / max(dot(ab, ab), 1.0), 0.0, 1.0);
+        let p = U.u_mouse_prev + t * ab;
+        let rel_stem = px - p;
+        let q = dot(rel_stem, rel_stem) / 1000.0;
         let hat = (q - 1.0) * exp(-q);
-        // Directional weighting — the V is ANCHORED AT THE CURSOR and
-        // opens behind the motion. Weight 1 + a*(2*cos^3 b - 1), with b
-        // the angle from the backward axis: 1+a exactly behind (the
-        // apex), decaying through the arms, 1-3a ahead (calm water).
-        //
-        // MASS NEUTRALITY, done right: the hat's positive lobe lies ON
-        // the segment (there cosb = 1 exactly, weight 1+a), while its
-        // compensating negative ring lies around it — so weighting the
-        // WHOLE hat by direction would over-weight the positive mass
-        // and sink the pond (a real bug we hit). Fix: weight only the
-        // positive lobe and give the negative ring exactly the apex
-        // weight (1+a). Positive and negative masses of (q-1)e^-q are
-        // equal (1/e of pi*sigma^2 each), so the stroke integrates to
-        // exactly 0 again — for ANY segment geometry.
-        let back = -normalize(vec2<f32>(0.0001) + U.u_mouse - U.u_mouse_prev);
-        let rel = in.uv * U.u_res - U.u_mouse;
+        // Directional weighting — comet wake anchored at the cursor:
+        // full strength right behind the motion (1.65), neutral at the
+        // sides (1.0), calm ahead (0.35). The hat is compact (its support
+        // is ~5 sigma wide) while the weight varies over screen scale, so
+        // over the hat w is nearly constant: the stroke mass stays
+        // w(center) · 0 = 0 up to a second-order residue. The level
+        // healing below removes that residue every frame.
+        let back = -normalize(vec2<f32>(0.0001) + ab);
+        let rel = px - U.u_mouse;
         let cosb = dot(rel / max(length(rel), 0.0001), back);
-        let apex = 1.0 + 0.65;
-        let w = 1.0 + 0.65 * (2.0 * cosb * cosb * cosb - 1.0);
-        let hat_d = w * max(hat, 0.0) + apex * min(hat, 0.0);
+        let hat_d = (1.0 + 0.65 * cosb * cosb * cosb) * hat;
         // 800 px/s => full strength; scaled by the intensity param.
         let push = min(U.mouse_speed / 800.0, 1.0);
         h += hat_d * 0.30 * push * (0.3 + 0.7 * U.u_params.x);
