@@ -51,6 +51,7 @@ const TEMPLATES: &[Template] = &[
         params: &[
             ("intensity", "Intensity", 0.6),
             ("damping", "Damping", 0.15),
+            ("ambient", "Ambient water", 0.5),
         ],
     },
     Template {
@@ -218,7 +219,7 @@ mod tests {
             let m = bruma_package::Manifest::parse(&json)
                 .unwrap_or_else(|e| panic!("template {}: {e}", t.name));
             assert_eq!(m.entry, "main.wgsl");
-            assert_eq!(m.params.len(), 2, "template {}", t.name);
+            assert_eq!(m.params.len(), t.params.len(), "template {}", t.name);
             assert_eq!(m.textures.len(), t.assets.len(), "template {}", t.name);
         }
     }

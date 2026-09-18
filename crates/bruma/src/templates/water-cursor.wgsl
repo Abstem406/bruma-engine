@@ -26,7 +26,9 @@
 //
 // PARAMETERS (wallpaper.json):
 //   intensity — ripple strength of the cursor's wake (default 0.6)
-//   damping   — how fast the wake calms down (default 0.35)
+//   damping   — how fast the wake calms down (default 0.15)
+//   ambient   — strength of the permanent ambient swell (default 0.5;
+//               0 = still pond, only your strokes move the water)
 
 struct Uniforms {
     u_time: f32,
@@ -171,18 +173,15 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(h + 0.5, v + 0.5, 0.5, 1.0);
 }
 
-// AMBIENT WATER — a permanent, time-animated ripple field (two broad
-// crossed sines plus a finer octave, domain-warped so it never reads
-// as a repeating pattern). It feeds the SAME normal the wake uses, so
-// light bands and refraction keep crawling over the whole surface
-// forever: the screen always reads as water, strokes or not. (The
-// previous ambient was a pure brightness modulation — too weak
-// against a detailed photo, which is why the surface seemed to
-// "lose" its water after a while.)
+// AMBIENT WATER — a permanent, STANDING ripple field (three broad
+// crossed waves, barely drifting over tens of seconds): a calm pond
+// breathing, not running water. Its gradient feeds the SAME normal the
+// wake uses, so the surface always reads as water. The `ambient`
+// parameter scales it (0 = still pond between strokes).
 fn swell(p: vec2<f32>, t: f32) -> f32 {
-    let w1 = sin(p.x * 0.042 + t * 0.9 + sin(p.y * 0.051 + t * 0.6) * 2.4);
-    let w2 = sin(p.y * 0.057 - t * 0.7 + sin(p.x * 0.049 - t * 0.5) * 2.1);
-    let w3 = sin((p.x + p.y) * 0.105 + t * 1.3 + sin(p.x * 0.031 - p.y * 0.026 + t * 0.4) * 1.5);
+    let w1 = sin(p.x * 0.028 + sin(p.y * 0.041) * 2.4 + t * 0.15);
+    let w2 = sin(p.y * 0.037 + sin(p.x * 0.033) * 2.1 - t * 0.12);
+    let w3 = sin((p.x + p.y) * 0.072 + sin(p.x * 0.021 - p.y * 0.017) * 1.5 + t * 0.18);
     return (w1 + w2) * 0.030 + w3 * 0.016;
 }
 
@@ -215,7 +214,8 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
         (swell(px + vec2<f32>(3.0, 0.0), u.u_time) - swell(px - vec2<f32>(3.0, 0.0), u.u_time)) / 6.0,
         (swell(px + vec2<f32>(0.0, 3.0), u.u_time) - swell(px - vec2<f32>(0.0, 3.0), u.u_time)) / 6.0,
     );
-    let grad = grad_wake + ga * (0.4 + 0.6 * u.u_params.x);
+    // `ambient` (u_params.z) scales the pond's breathing; 0 = still.
+    let grad = grad_wake + ga * (0.1 + 1.1 * u.u_params.z);
 
     // Cover-fit: fill the screen without distorting the photo.
     let img = textureDimensions(tex0);
