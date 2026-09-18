@@ -50,7 +50,7 @@ const TEMPLATES: &[Template] = &[
         )],
         params: &[
             ("intensity", "Intensity", 0.6),
-            ("damping", "Damping", 0.35),
+            ("damping", "Damping", 0.15),
         ],
     },
     Template {

@@ -110,9 +110,10 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     // rings across the whole screen in ~1.5 s and they reach far
     // before dying.
     var v = c.g + (sum - 4.0 * c.r) * 0.49;
-    // Damping: the wake survives for many seconds (0.2%/frame of
-    // velocity loss at damping 0); the param shortens it on demand.
-    v *= 0.998 - 0.005 * U.u_params.y;
+    // Damping: the wake lingers for a long time (0.05%/frame of
+    // velocity loss at damping 0 — rings cross the screen and back
+    // before they die); the param shortens it on demand.
+    v *= 0.9995 - 0.0045 * U.u_params.y;
     var h = c.r + v;
 
     // The pointer injects energy proportional to its SPEED (px/s, the
@@ -137,7 +138,7 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         let ab = max(b - a, vec2<f32>(0.0001));
         let p = clamp(in.uv * U.u_res, a, b);
         let d = distance(in.uv * U.u_res, p);
-        let q = d * d / 2000.0;
+        let q = d * d / 1000.0;
         let hat = (q - 1.0) * exp(-q);
         // Directional weighting — the V is ANCHORED AT THE CURSOR and
         // opens behind the motion. Weight 1 + a*(2*cos^3 b - 1), with b
@@ -154,22 +155,7 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         let hat_d = hat * (1.0 + 0.65 * (2.0 * cosb * cosb * cosb - 1.0));
         // 800 px/s => full strength; scaled by the intensity param.
         let push = min(U.mouse_speed / 800.0, 1.0);
-        h += hat_d * 0.24 * push * (0.3 + 0.7 * U.u_params.x);
-    }
-
-    // Ambient life: three random drops every 0.4 s (~7.5 drops/s) at
-    // VISIBLE amplitude — a resting pond must look like water being
-    // stirred by a fine drizzle, never like a still photo.
-    {
-        let k = floor(U.u_time / 0.4);
-        for (var j: i32 = 0; j < 3; j++) {
-            let s = k * 3.0 + f32(j);
-            let r1 = fract(sin(s * 127.1) * 43758.5453);
-            let r2 = fract(sin(s * 269.5) * 18343.8235);
-            let d = distance(in.uv * U.u_res, vec2<f32>(r1, r2) * U.u_res);
-            let q = d * d / 1100.0;
-            h += (q - 1.0) * exp(-q) * 0.22;
-        }
+        h += hat_d * 0.30 * push * (0.3 + 0.7 * U.u_params.x);
     }
 
     // The pond always returns to calm: a very slow pull of the height
@@ -193,12 +179,20 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     // broad, soft light bands (the wake reads as smooth light, not
     // per-pixel speckle). Gain ×48 tilts the normal hard enough for
     // clearly visible light bands.
+    // Two scales of slope (3 and 9 texels): the fine one keeps the
+    // liquid detail, the broad one the smooth viscous flow of light.
     let e3 = e * 3.0;
-    let hL = prev_at(uv - vec2<f32>(e3.x, 0.0)).r;
-    let hR = prev_at(uv + vec2<f32>(e3.x, 0.0)).r;
-    let hB = prev_at(uv - vec2<f32>(0.0, e3.y)).r;
-    let hU = prev_at(uv + vec2<f32>(0.0, e3.y)).r;
-    let grad = vec2<f32>(hR - hL, hU - hB) / 6.0;
+    let e9 = e * 9.0;
+    let grad = (
+        vec2<f32>(
+            prev_at(uv + vec2<f32>(e3.x, 0.0)).r - prev_at(uv - vec2<f32>(e3.x, 0.0)).r,
+            prev_at(uv + vec2<f32>(0.0, e3.y)).r - prev_at(uv - vec2<f32>(0.0, e3.y)).r,
+        ) / 6.0
+            + vec2<f32>(
+                prev_at(uv + vec2<f32>(e9.x, 0.0)).r - prev_at(uv - vec2<f32>(e9.x, 0.0)).r,
+                prev_at(uv + vec2<f32>(0.0, e9.y)).r - prev_at(uv - vec2<f32>(0.0, e9.y)).r,
+            ) / 18.0
+    ) * 0.5;
 
     // Cover-fit: fill the screen without distorting the photo.
     let img = textureDimensions(tex0);
@@ -256,7 +250,7 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
 
     // A sheen on the steepest crests, for sparkle (bounded mix: the
     // rims can never clip to pure white).
-    let spec = pow(clamp(dot(reflect(-l, n), vec3<f32>(0.0, 0.0, 1.0)), 0.0, 1.0), 20.0);
+    let spec = pow(clamp(dot(reflect(-l, n), vec3<f32>(0.0, 0.0, 1.0)), 0.0, 1.0), 34.0);
     col = mix(col, vec3<f32>(0.9, 0.94, 1.0), spec * 0.25);
 
     return vec4<f32>(col, 1.0);

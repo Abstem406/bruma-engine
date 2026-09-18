@@ -959,3 +959,17 @@ from the backward axis — apex (exactly behind the cursor) at 1.65x,
 0.80x at the 45-degree arms, 0.35x straight ahead. The angular mean
 stays exactly 1 (cos^3 averages to zero), so the mass balance and the
 forever-alive pond survive. 52 tests green; demo v21 running.
+
+## 2026-09-18 — Liquid feel, long fade, no ambient drops
+User feedback: water should feel more liquid, the wake's fade-out should
+last longer, and the ambient "rain drops" must go (they read as noise,
+not as the calm pond the user wants behind the cursor).
+- Removed the ambient drizzle entirely (the permanent swell sheen stays:
+  surface still always reads as water, without drop rings).
+- Fade: velocity retention 0.9995 - 0.0045*damping (was 0.998-...):
+  ~7x longer wake life at the new default damping 0.15 (also updated in
+  the scaffold manifest).
+- Liquid: finer stem (sigma 47->32 px, amplitude 0.30), two-scale slope
+  in the display pass (3+9 texel taps) for detail + viscous light flow,
+  tighter specular (pow 34) for finer glints.
+52 tests green; demo v22 running.
