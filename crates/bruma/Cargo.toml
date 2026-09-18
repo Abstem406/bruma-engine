@@ -22,8 +22,9 @@ serde_json = "1.0.151"
 # `bruma params` SIGHUPs the running daemon for live tuning; the
 # platform crate already carries libc for the sigaction side.
 libc = "0.2"
+# `bruma studio` validates shader edits with the same WGSL validator
+# the engine runs before writing (naga rides in the tree via wgpu —
+# no new code, D8).
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 
 [dev-dependencies]
-# Template validation in tests: same WGSL compiler/validator the engine
-# runs (naga rides in the tree via wgpu — no new code, D8).
-naga = { version = "30.0.1", features = ["wgsl-in"] }

@@ -77,7 +77,7 @@ struct Template {
     params: &'static [(&'static str, &'static str, f32)],
 }
 
-fn template_source(name: &str) -> Option<&'static str> {
+pub fn template_source(name: &str) -> Option<&'static str> {
     TEMPLATES.iter().find(|t| t.name == name).map(|t| t.source)
 }
 
@@ -101,7 +101,7 @@ const PREVIEW_PNG: &[u8] = &[
 
 /// Builds the manifest JSON for a new package (schema v1 + `textures`).
 /// `None` if the template name is unknown.
-fn manifest_json(title: &str, template: &str) -> Option<String> {
+pub fn manifest_json(title: &str, template: &str) -> Option<String> {
     let tpl = TEMPLATES.iter().find(|t| t.name == template)?;
     // Capabilities the template needs: plain shaders only read params;
     // trail needs the previous frame; parallax reacts to the pointer;

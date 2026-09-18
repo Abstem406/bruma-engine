@@ -1258,3 +1258,34 @@ reset [NAME]] [--output NAME]`.
   (accidentally uninstalled by the curl test) rebuilt from the `water`
   template and reinstalled; demo-ripple re-activated through the
   gallery API itself.
+
+## 2026-09-18 — `bruma studio`, Phase A of the web creator (decision: web over native)
+
+The architecture decision (recorded in the thread): WebGPU executes the
+same WGSL the engine runs, and a browser tab beats a native toolkit for
+editing UI (D8 held: zero new dependencies — naga just moved from
+dev-deps to deps). Phase A ships now; Phase B (WebGPU canvas preview)
+extends this same API later.
+
+- `bruma studio [--port N]`: loopback server (same hand-rolled pattern
+  as gallery) + embedded editor UI. THE INSIGHT: the running daemon is
+  the live preview — the studio edits the installed package and the
+  daemon hot-reloads shader-by-mtime / params-by-SIGHUP. Two monitors
+  = edit left, watch right.
+- API (all curl-verified live): GET /api/packages, POST /api/create
+  (`new::create` + pack + install, verified: created `studio-demo` from
+  the fog template), GET/PUT /api/shader (PUT validates with naga on
+  prelude+source — the exact production assembly; a broken shader is
+  rejected with line numbers and never lands on disk, verified), GET
+  /api/manifest, GET /api/params (defaults + config overrides), POST
+  /api/params (persists + SIGHUP; EDITING IS VIEWING: if the config
+  runs another package the section adopts this one — verified: the
+  first slider move switched the wallpaper and `[0.70, ...]` appeared
+  in the daemon log).
+- UI: package selector, template picker (scaffold dialog), generated
+  parameter sliders (debounced, live), shader textarea with Ctrl-S
+  apply and naga error display.
+- Found live and fixed: `new::create` scaffolds into a `name` subdir
+  (the studio packs that root); validation must include the engine
+  prelude (shaders call `bruma_texture_fit`); manifest structs gained
+  Serialize.

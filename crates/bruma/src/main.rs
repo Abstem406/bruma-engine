@@ -14,6 +14,7 @@ mod gallery;
 mod mime;
 mod new;
 mod params;
+mod studio;
 
 fn main() {
     // Minimal logging with no dependencies; when the project needs more, a
@@ -35,6 +36,7 @@ fn main() {
         Some("open") => mime::open_command(&args.collect::<Vec<_>>()),
         Some("mime") => mime::mime_command(&args.collect::<Vec<_>>()),
         Some("gallery") => gallery::gallery_command(&args.collect::<Vec<_>>()),
+        Some("studio") => studio::studio_command(&args.collect::<Vec<_>>()),
         Some("service") => service_command(&args.collect::<Vec<_>>()),
         Some("--version") | Some("-V") | None => {
             println!(
@@ -43,14 +45,15 @@ fn main() {
             );
             if std::env::args().count() == 1 {
                 eprintln!(
-                    "\nUsage: bruma <COMMAND>\n\nCommands:\n  run [options] [color]    Background behind the windows (no flags: uses the config)\n  validate PACKAGE         Validates a .wallpaper file\n  install PACKAGE          Installs a package\n  open PACKAGE.wallpaper   Installs it AND makes it the wallpaper\n  mime install|remove      Registers .wallpaper for double click / drag-and-drop\n  gallery [--port N]       Visual collection manager (browser, drag & drop)\n  list                     Lists installed packages\n  pack DIRECTORY           Packs a directory into .wallpaper\n  new NAME [--template T]  Scaffolds a wallpaper package (templates: {} )  \n  config init|show         Creates/shows the persistent config\n  params WALLPAPER [op]    Live parameter tuning (list | set NAME VALUE | reset)\n  service install|remove   Starts with the session (user service)",
+                    "\nUsage: bruma <COMMAND>\n\nCommands:\n  run [options] [color]    Background behind the windows (no flags: uses the config)\n  validate PACKAGE         Validates a .wallpaper file\n  install PACKAGE          Installs a package\n  open PACKAGE.wallpaper   Installs it AND makes it the wallpaper\n  mime install|remove      Registers .wallpaper for double click / drag-and-drop\n  gallery [--port N]       Visual collection manager (browser, drag & drop)
+  studio [--port N]        Visual creator: edit shader/params with live preview\n  list                     Lists installed packages\n  pack DIRECTORY           Packs a directory into .wallpaper\n  new NAME [--template T]  Scaffolds a wallpaper package (templates: {} )  \n  config init|show         Creates/shows the persistent config\n  params WALLPAPER [op]    Live parameter tuning (list | set NAME VALUE | reset)\n  service install|remove   Starts with the session (user service)",
                     new::template_list()
                 );
             }
         }
         Some(other) => {
             eprintln!(
-                "unknown command: {other}\n\nAvailable commands:\n  run | validate | install | open | mime | gallery | list | pack | new | config | params | service"
+                "unknown command: {other}\n\nAvailable commands:\n  run | validate | install | open | mime | gallery | studio | list | pack | new | config | params | service"
             );
             std::process::exit(2);
         }

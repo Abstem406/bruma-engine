@@ -16,6 +16,7 @@
 //! @group(0) @binding(2) var samp0: sampler;
 //! ```
 
+use serde::Serialize;
 use std::fmt;
 use std::path::Path;
 
@@ -27,7 +28,7 @@ use crate::error::PackError;
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Fields the v1 schema requires (PLAN Phase 4).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Manifest {
     /// Schema version (1).
     pub format: u32,
@@ -63,7 +64,7 @@ pub struct Manifest {
 }
 
 /// One declared texture: path + aspect fit.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TextureSpec {
     /// Path under `assets/`, png/jpg.
     pub path: String,
@@ -73,7 +74,7 @@ pub struct TextureSpec {
 }
 
 /// Aspect mapping of a texture onto the output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub enum TextureFit {
     /// Fill the screen, cropping the overflow (a wallpaper default).
     #[default]
@@ -85,8 +86,8 @@ pub enum TextureFit {
 /// Textures-per-package cap (each is a binding pair in group 0).
 pub const MAX_TEXTURES: usize = 4;
 
-/// An adjustable parameter declared by the wallpaper.
-#[derive(Debug, Clone, PartialEq)]
+/// One adjustable parameter declared by the wallpaper.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Param {
     /// Name (identity in the CLI/UI), e.g. `"speed"`.
     pub name: String,
