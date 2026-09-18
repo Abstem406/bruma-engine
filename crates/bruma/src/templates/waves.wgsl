@@ -52,7 +52,8 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
     var out: VsOutput;
     out.position = vec4<f32>(positions[idx], 0.0, 1.0);
     // UVs with Y pointing up, shadertoy-style.
-    out.uv = vec2<f32>(uvs[idx].x, 1.0 - uvs[idx].y);
+    // Engine orientation contract (same as image.wgsl): uv.y = 0 at the top.
+    out.uv = uvs[idx];
     return out;
 }
 

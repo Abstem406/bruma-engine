@@ -16,7 +16,8 @@
 //! on the crate's asset path at runtime.
 
 use bruma_renderer_wgpu::{
-    BLIT_DISPLAY_APPEND, build_quad_pipeline_entry, compile_wgsl, prev_frame_bind_group_layout,
+    BLIT_DISPLAY_APPEND, BLIT_WGSL, SIM_FORMAT, build_quad_pipeline_entry, compile_wgsl,
+    prev_frame_bind_group_layout,
 };
 use image::ImageReader;
 
@@ -43,6 +44,8 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
     let photo_view = create_texture_view(&device, &queue, &photo, photo.dimensions());
 
     // ---- Group 1: the "previous frame" texture the passes read ----
+    // fp16 calm state (h = 0.5, v = 0.5): EXACTLY what a fresh sim
+    // target looks like (fp16 0.5 = 0x3800, 1.0 = 0x3C00).
     let prev_layout = prev_frame_bind_group_layout(&device);
     let init = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("test-prev-init"),
@@ -54,11 +57,12 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
+        format: SIM_FORMAT,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let calm = vec![128u8; (W * H * 4) as usize];
+    let calm_texels: Vec<u8> =
+        [0x00u8, 0x38, 0x00, 0x38, 0x00, 0x38, 0x00, 0x3C].repeat((W * H) as usize);
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture: &init,
@@ -66,10 +70,10 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &calm,
+        &calm_texels,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(W * 4),
+            bytes_per_row: Some(W * 8),
             rows_per_image: None,
         },
         wgpu::Extent3d {
@@ -126,12 +130,13 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
         "fs_display",
     );
 
-    // ---- Sim pipeline: creator's own fs_main ----
+    // ---- Sim pipeline: creator's own fs_main, into the fp16 offscreen
+    // format (exactly what the production renderer does) ----
     let sim_module =
         compile_wgsl(&device, WATER_CURSOR_WGSL, "test-sim").expect("creator shader compiles");
     let sim_pipeline = build_quad_pipeline_entry(
         &device,
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        SIM_FORMAT,
         &sim_module,
         &group0,
         Some(&prev_layout),
@@ -172,14 +177,40 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
         &sampler,
         &dummy_view,
     );
-    let screen = render_to_pixels(&device, &queue, &display_pipeline, &group0_m, &prev_bg);
-    // The screen must NOT be the raw sim encoding (a flat gray frame,
-    // r≈0.5): the blit must have gone through display(), which samples
-    // the PHOTO and returns a full color image. Photo and sim state are
-    // told apart by channel spread: a photo has color variance, the sim
-    // encoding (0.5, 0.5, 1) is flat.
-    let center = sample3(&screen, W / 2, H / 2);
-    let corner = sample3(&screen, 8, 8);
+    let screen = render_to_pixels(
+        &device,
+        &queue,
+        &display_pipeline,
+        &group0_m,
+        &prev_bg,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    );
+    // The screen must show the PHOTO (not the flat sim encoding, and not
+    // black): with a calm state the refraction is ~0, so a colorful photo
+    // pixel must land at the same screen coordinate, channels preserved.
+    // (The lake's center is gray water and the corner is gray sky — a
+    // variance probe THERE is meaningless; find a genuinely colorful
+    // pixel in the photo instead.)
+    let (px, py) = {
+        let mut best = (0u32, 0u32, 0i32);
+        let raw = photo.as_raw();
+        let pw = photo.dimensions().0;
+        for y in (0..photo.dimensions().1).step_by(7) {
+            for x in (0..pw).step_by(7) {
+                let o = ((y * pw + x) * 4) as usize;
+                let range = [raw[o], raw[o + 1], raw[o + 2]]
+                    .iter()
+                    .fold((255i32, 0i32), |(a, b), &v| {
+                        (a.min(v as i32), b.max(v as i32))
+                    });
+                if range.1 - range.0 > best.2 {
+                    best = (x * W / pw, y * H / photo.dimensions().1, range.1 - range.0);
+                }
+            }
+        }
+        (best.0, best.1)
+    };
+    let got = sample3(&screen, px.max(2), py.max(2));
     let chan_range = |rgb: [u8; 3]| -> u8 {
         let (mn, mx) = rgb
             .iter()
@@ -187,14 +218,13 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
         mx - mn
     };
     assert!(
-        chan_range(center) > 4 || chan_range(corner) > 4,
-        "screen is a flat frame: display() was not called (raw sim state?)"
+        chan_range(got) > 15,
+        "screen at the photo's most colorful pixel ({px},{py}) is flat {got:?}: display() was not called"
     );
 
-    // ============ 2) the pointer drop injects energy ============
-    // Mouse AT the center vs unknown: the sim output must differ at the
-    // center (the Gaussian drop adds height where the cursor is).
-    write_uniforms(&queue, &uniform_buf, [W as f32 / 2.0, H as f32 / 2.0]);
+    // ============ 2) the pointer drop injects energy WHERE THE CURSOR IS
+    // (not mirrored): cursor at (W/4, 3H/4) vs unknown.
+    write_uniforms(&queue, &uniform_buf, [W as f32 / 4.0, 3.0 * H as f32 / 4.0]);
     let g = bind_group0(
         &device,
         &group0,
@@ -203,7 +233,7 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
         &sampler,
         &dummy_view,
     );
-    let dropped = render_to_pixels(&device, &queue, &sim_pipeline, &g, &prev_bg);
+    let dropped = render_to_pixels(&device, &queue, &sim_pipeline, &g, &prev_bg, SIM_FORMAT);
     write_uniforms(&queue, &uniform_buf, [-1.0, -1.0]);
     let g = bind_group0(
         &device,
@@ -213,13 +243,118 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
         &sampler,
         &dummy_view,
     );
-    let calm = render_to_pixels(&device, &queue, &sim_pipeline, &g, &prev_bg);
+    let calm = render_to_pixels(&device, &queue, &sim_pipeline, &g, &prev_bg, SIM_FORMAT);
 
-    let center = ((H / 2 * W + W / 2) * 4) as usize;
-    let delta = (dropped[center] as i32 - calm[center] as i32).unsigned_abs();
+    // The state is fp16: compare height halves (u16). The Gaussian drop
+    // at the cursor moves h by ~0.03 (~44 fp16 ULPs around 0.5); the
+    // ambient shimmer alone stays within ±20.
+    let h_at = |data: &[u8], x: u32, y: u32| -> i32 {
+        let o = ((y * W + x) * 8) as usize;
+        i32::from(u16::from_le_bytes([data[o], data[o + 1]]))
+    };
+    let drop_here = h_at(&dropped, W / 4, 3 * H / 4) - h_at(&calm, W / 4, 3 * H / 4);
+    let drop_mirror = h_at(&dropped, W / 4, H / 4) - h_at(&calm, W / 4, H / 4);
     assert!(
-        delta > 0,
-        "the pointer drop had no effect on the sim output"
+        drop_here.abs() > 36,
+        "the ripple did not land under the cursor (delta {drop_here})"
+    );
+    assert!(
+        drop_mirror.abs() <= 30,
+        "the ripple landed mirrored into the opposite half (delta {drop_mirror})"
+    );
+}
+
+/// Orientation contract, pinned offline: the internal blits render the
+/// frame UPRIGHT — the creator shaders' vertices flip uv.y (`1 - y`),
+/// so the blits must do the same. Regression for the upside-down water
+/// demo (blit without the flip vs. creators with it).
+#[test]
+fn blit_preserves_orientation() {
+    let Some((device, queue)) = offline_device() else {
+        return;
+    };
+
+    // A half-red / half-green source in group 1 (red = row 0).
+    let mut frame = image::RgbaImage::new(W, H);
+    for y in 0..H / 2 {
+        for x in 0..W {
+            frame.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+        }
+    }
+    for y in H / 2..H {
+        for x in 0..W {
+            frame.put_pixel(x, y, image::Rgba([0, 255, 0, 255]));
+        }
+    }
+    let view = create_texture_view(&device, &queue, &frame, (W, H));
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+    let prev_layout = prev_frame_bind_group_layout(&device);
+    let prev_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("orient-prev"),
+        layout: &prev_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+
+    // Group 0: uniform + dummies (the blits declare it but don't use it).
+    let (bgl0, bg0, _buf) = {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("orient-g0"),
+            entries: &[uniform_entry()],
+        });
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("orient-uniforms"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        write_uniforms(&queue, &buf, [-1.0, -1.0]);
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("orient-g0-bg"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(buf.as_entire_buffer_binding()),
+            }],
+        });
+        (layout, bg, buf)
+    };
+
+    let module = compile_wgsl(&device, BLIT_WGSL, "orient-blit").expect("blit compiles");
+    let pipeline = build_quad_pipeline_entry(
+        &device,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &module,
+        &bgl0,
+        Some(&prev_layout),
+        "fs_main",
+    );
+    let screen = render_to_pixels(
+        &device,
+        &queue,
+        &pipeline,
+        &bg0,
+        &prev_bg,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    );
+
+    let top = sample3(&screen, W / 2, 4);
+    let bottom = sample3(&screen, W / 2, H - 5);
+    assert!(
+        top[0] > 200 && top[1] < 60,
+        "top row must stay the source's top (red), got {top:?}"
+    );
+    assert!(
+        bottom[1] > 200 && bottom[0] < 60,
+        "bottom row must stay the source's bottom (green), got {bottom:?}"
     );
 }
 
@@ -393,6 +528,7 @@ fn render_to_pixels(
     pipeline: &wgpu::RenderPipeline,
     group0: &wgpu::BindGroup,
     prev: &wgpu::BindGroup,
+    format: wgpu::TextureFormat,
 ) -> Vec<u8> {
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("test-display-target"),
@@ -404,7 +540,7 @@ fn render_to_pixels(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
@@ -434,7 +570,9 @@ fn render_to_pixels(
         pass.set_bind_group(1, prev, &[]);
         pass.draw(0..4, 0..1);
     }
-    let bytes_per_row = W * 4;
+    let bytes_per_row = W * format
+        .block_copy_size(Some(wgpu::TextureAspect::All))
+        .unwrap();
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("test-display-readback"),
         size: (bytes_per_row * H) as u64,

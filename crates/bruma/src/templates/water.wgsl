@@ -45,7 +45,8 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
     var out: VsOutput;
     out.position = vec4<f32>(positions[idx], 0.0, 1.0);
     // UVs with Y pointing up, shadertoy-style.
-    out.uv = vec2<f32>(uvs[idx].x, 1.0 - uvs[idx].y);
+    // Engine orientation contract (same as image.wgsl): uv.y = 0 at the top.
+    out.uv = uvs[idx];
     return out;
 }
 
@@ -61,7 +62,9 @@ fn ripples(p: vec2<f32>, t: f32, amp: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
-    let uv = in.uv;
+    // uv.y = 0 at the BOTTOM (look composed pre-contract; one flip keeps
+    // the far shore at the top of the pool).
+    let uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
     let strength = 0.1 + 0.6 * U.u_params.x;
     let t = U.u_time * (0.3 + 1.4 * U.u_params.y);
 

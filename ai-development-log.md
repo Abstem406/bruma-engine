@@ -747,3 +747,45 @@ iGPU AMD 660M/RADV) y gates verdes (fmt, clippy 0 warnings, 49 tests).
   2-5 otra vez: verificar con render offline, no con capturas.
 - **Gates:** fmt, clippy 0 warnings, 50 tests, cargo install OK.
   Demo en vivo: 0 errores, puntero vinculado, ambas salidas activas.
+
+## 2026-09-17 — water-cursor v4: physics and orientation fixed after live demo
+
+The first live demo of `water-cursor` was broken in four ways the gates
+had not caught. Root causes and fixes:
+
+- **Upside-down photo (every feedback wallpaper).** The creator
+  templates flipped `uv.y` (`1 - y`) while `image.wgsl` (phase 2,
+  verified upright back then) does not — in Vulkan NDC, NDC.y=-1 is the
+  TOP, so the flip turned every textured template upside down, and the
+  blits' double correction hid it in the demo. Decision: the engine's
+  orientation contract is uv.y=0 at the TOP, nothing ever flips.
+  All 7 templates now match `image.wgsl`; procedural ones (fog, water,
+  parallax) keep their look with a single `1 - uv.y` at the top of
+  fs_main; parallax's mouse Y also comes out aligned.
+- **Frozen rings + grain (the sim was diffusion in 8-bit sRGB).**
+  The old fs_main averaged neighbors (no propagation, no momentum) and
+  its target was the swapchain's sRGB format: quantization froze the
+  rings, and a per-frame "shimmer" injected grain. Now: real wave
+  equation (height + velocity in R/G, c²=0.4), offscreen targets are
+  fp16 LINEAR (`SIM_FORMAT = Rgba16Float`), the creator pipeline is
+  built for that format at construction (feedback is now a constructor
+  argument, not a post-hoc setter — it decides the target format), and
+  the shimmer is gone.
+- **White rims + blur soup (v1 of the display look).** Refraction ×0.4
+  displaced the lookup dozens of pixels (blur); additive glints and a
+  wet-tint burned wave crests to white. Now: refraction ×0.03 (photo
+  stays sharp), the diffuse-reflection lambert term MULTIPLIES the
+  photo (0.78..1.33 — broad light bands that cannot clip), faint sheen
+  only at pow>40. Slope is sampled 2 texels apart: smooth bands.
+- **Tests that now pin the physics offline** (`display_blit.rs`): the
+  blit preserves orientation (red top → red top); the ripple lands
+  UNDER the cursor (>36 fp16 ULPs) and NOT in its vertical mirror
+  (≤30) — "the effect appears in the opposite half" can never return;
+  the screen shows the photo through display() (most-colorful-pixel
+  probe; the old center-variance probe died on the gray lake center).
+- **Lesson:** `bruma install` refuses to overwrite the same version —
+  template edits never reach the desktop without wiping the store. The
+  v2/v3 "still broken" reports were the old package still running.
+
+Evidence: `demos/fase6/water-cursor-v4.{png,log}` (upright, sharp, 0
+GPU errors, RADV/Vulkan). Gates: fmt, clippy 0 warnings, 15 suites OK.

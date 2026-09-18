@@ -47,7 +47,8 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
 
     var out: VsOutput;
     out.position = vec4<f32>(positions[idx], 0.0, 1.0);
-    out.uv = vec2<f32>(uvs[idx].x, 1.0 - uvs[idx].y);
+    // Engine orientation contract (same as image.wgsl): uv.y = 0 at the top.
+    out.uv = uvs[idx];
     return out;
 }
 
@@ -96,7 +97,7 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     let dayness = smoothstep(6.5, 9.0, U.u_clock.x) * (1.0 - smoothstep(17.5, 20.0, U.u_clock.x));
     let night = vec3<f32>(0.03, 0.05, 0.10);
     let day = vec3<f32>(0.35, 0.55, 0.75);
-    var col = mix(night, day, dayness) * (0.35 + 0.5 * (1.0 - in.uv.y));
+    var col = mix(night, day, dayness) * (0.35 + 0.5 * in.uv.y);
 
     // Three aurora bands at increasing depth. Deeper layers: slower
     // drift and LESS parallax (they are "far away").

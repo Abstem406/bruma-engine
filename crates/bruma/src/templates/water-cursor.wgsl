@@ -1,24 +1,27 @@
 // Calm water following the cursor — template (feedback + mouse).
 //
 // A real water SIMULATION: a height field that ripples where the pointer
-// moves and keeps propagating on its own, drawn as refraction and
-// specular light over a fixed photo (the manifest's `textures`). The
-// wake fades in a couple of seconds — the classic "calm water" effect.
+// moves, propagates on its own and settles back to calm in a few
+// seconds. The photo is re-drawn with DIFFUSE REFLECTION — broad, soft
+// bands of light that smear across the wake (the "calm water" look) —
+// plus a gentle specular sheen on the steepest ripples.
 //
 // HOW IT WORKS (the only template family with a second entry point):
 //   fs_main(uv)           — SIM pass, offscreen, runs every frame. Reads
 //                           the previous state from group 1 and returns
 //                           the new water state. Nothing here reaches
-//                           the screen.
+//                           the screen. The target is fp16: the state
+//                           must stay continuous frame to frame.
 //   display(uv, frame, u) — DISPLAY pass. `frame` is what fs_main just
 //                           produced, `u` the uniform block: use the
-//                           state to bend and light the photo, and
-//                           return the SCREEN color.
+//                           state to light the photo and return the
+//                           SCREEN color.
 //
-// The wave math: frame.r encodes the water height around 0.5. Each frame
-// the height relaxes toward its neighborhood average (waves propagate)
-// and a bit of energy is absorbed (damping). Moving the pointer injects
-// a drop. Zero per-pixel branching, iGPU-friendly at 30 fps.
+// State, per texel (fp16, around 0.5):
+//   R = water height   G = vertical velocity
+// Update: classic wave equation — velocity pulls toward the neighbors'
+// average height (that is what makes rings PROPAGATE), height follows
+// its own velocity, then a light damping calms everything down.
 //
 // PARAMETERS (wallpaper.json):
 //   intensity — ripple strength of the cursor's wake (default 0.6)
@@ -70,53 +73,93 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
 
     var out: VsOutput;
     out.position = vec4<f32>(positions[idx], 0.0, 1.0);
-    out.uv = vec2<f32>(uvs[idx].x, 1.0 - uvs[idx].y);
+    // Engine orientation contract (same as image.wgsl): uv.y = 0 at the
+    // TOP of the target. Nothing flips here — ever.
+    out.uv = uvs[idx];
     return out;
 }
 
 // One texel of the previous state (uv in texel centers).
-fn prev_at(uv: vec2<f32>) -> f32 {
-    return textureSampleLevel(prev_tex, prev_samp, uv, 0.0).r;
+fn prev_at(uv: vec2<f32>) -> vec2<f32> {
+    return textureSampleLevel(prev_tex, prev_samp, uv, 0.0).rg;
 }
 
 // ===== SIM PASS (offscreen, per frame) =====
 @fragment
 fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
-    let px = 1.0 / max(U.u_res, vec2<f32>(1.0));
-    let h = prev_at(in.uv);
-    let avg = 0.25 * (prev_at(in.uv + vec2<f32>(px.x, 0.0))
-                    + prev_at(in.uv - vec2<f32>(px.x, 0.0))
-                    + prev_at(in.uv + vec2<f32>(0.0, px.y))
-                    + prev_at(in.uv - vec2<f32>(0.0, px.y)));
+    let e = 1.0 / max(U.u_res, vec2<f32>(1.0));
+    let c = prev_at(in.uv) - vec2<f32>(0.5);
+    let sum = (prev_at(in.uv + vec2<f32>(e.x, 0.0)).r - 0.5)
+            + (prev_at(in.uv - vec2<f32>(e.x, 0.0)).r - 0.5)
+            + (prev_at(in.uv + vec2<f32>(0.0, e.y)).r - 0.5)
+            + (prev_at(in.uv - vec2<f32>(0.0, e.y)).r - 0.5);
 
-    // Propagate toward the neighborhood and damp toward calm (0.5).
-    let damping = 0.05 + 0.5 * U.u_params.y;
-    var height = h + (avg - h) * 0.42;
-    height = mix(height, 0.5, damping * 0.08);
+    // Wave equation: velocity toward the neighborhood, height follows.
+    // Courant-safe for this stencil (c^2 <= 0.5); 0.4 makes the rings
+    // cross the screen in a couple of seconds.
+    var v = c.g + (sum - 4.0 * c.r) * 0.4;
+    v *= 0.995 - 0.01 * U.u_params.y; // damping: the wake fades in seconds
+    var h = c.r + v;
 
-    // The pointer drips: a Gaussian drop wherever the cursor is.
+    // The pointer drips: a wide Gaussian drop wherever the cursor is —
+    // rings that expand outward across the photo.
     if (U.u_mouse.x >= 0.0) {
-        let m = U.u_mouse * px;
-        let d = length((in.uv - m) * U.u_res) / max(U.u_res.y, 1.0);
-        height += exp(-d * d * 2200.0) * (0.08 + 0.5 * U.u_params.x);
+        let m = U.u_mouse * e;
+        let d = distance(in.uv * U.u_res, m * U.u_res);
+        h += exp(-d * d / 900.0) * -0.06 * (0.3 + 0.7 * U.u_params.x);
     }
 
-    return vec4<f32>(clamp(height, 0.0, 1.0), 0.5, 0.5, 1.0);
+    // Clamp: a runaway value (driver hiccup) can never poison the
+    // field — NaN/Inf would otherwise persist forever.
+    h = clamp(h, -1.0, 1.0);
+    v = clamp(v, -1.0, 1.0);
+
+    return vec4<f32>(h + 0.5, v + 0.5, 0.5, 1.0);
 }
 
 // ===== DISPLAY PASS (what the screen shows) =====
 fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
-    let px = 1.0 / max(u.u_res, vec2<f32>(1.0));
-    let hx = frame.r - textureSampleLevel(prev_tex, prev_samp, uv + vec2<f32>(px.x, 0.0), 0.0).r;
-    let hy = frame.r - textureSampleLevel(prev_tex, prev_samp, uv + vec2<f32>(0.0, px.y), 0.0).r;
+    let e = 1.0 / max(u.u_res, vec2<f32>(1.0));
+    // Water slope from the height field, sampled 2 texels apart:
+    // broader, softer light bands (the wake reads as smooth light, not
+    // per-pixel speckle).
+    let e2 = e * 2.0;
+    let hL = prev_at(uv - vec2<f32>(e2.x, 0.0)).r;
+    let hR = prev_at(uv + vec2<f32>(e2.x, 0.0)).r;
+    let hB = prev_at(uv - vec2<f32>(0.0, e2.y)).r;
+    let hU = prev_at(uv + vec2<f32>(0.0, e2.y)).r;
+    let grad = vec2<f32>(hR - hL, hU - hB) * 0.25;
 
-    // Refraction: bend the photo lookup along the water's slope.
-    let bend = 0.01 + 0.06 * u.u_params.x;
-    var col = textureSample(tex0, samp0, uv + vec2<f32>(hx, hy) * 6.0 * bend).rgb;
+    // Cover-fit: fill the screen without distorting the photo.
+    let img = textureDimensions(tex0);
+    let screenAsp = u.u_res.x / u.u_res.y;
+    let imgAsp = f32(img.x) / f32(img.y);
+    var scale = vec2<f32>(1.0);
+    if (screenAsp > imgAsp) {
+        scale = vec2<f32>(1.0, imgAsp / screenAsp);
+    } else {
+        scale = vec2<f32>(screenAsp / imgAsp, 1.0);
+    }
 
-    // Sun glints where the wave slopes catch the light.
-    let glint = clamp(length(vec2<f32>(hx, hy)) * 30.0 * (0.4 + u.u_params.x), 0.0, 1.0);
-    col += vec3<f32>(1.0, 0.97, 0.9) * glint * glint * 0.35;
+    // Refraction: a few-pixel pull along the slope. Small on purpose:
+    // the photo must stay sharp — the effect reads through the LIGHT,
+    // not through warping the image into soup.
+    let base = (uv - 0.5) * scale + 0.5;
+    let bent = clamp(base + grad * 0.03, vec2<f32>(0.0), vec2<f32>(1.0));
+    var col = textureSampleLevel(tex0, samp0, bent, 0.0).rgb;
+
+    // DIFFUSE REFLECTION: soft light on a slope-derived normal. The
+    // lambert term MULTIPLIES the photo (0.85..1.35): broad light/shadow
+    // bands slide across the wake and the image keeps all its detail —
+    // nothing clips toward white.
+    let n = normalize(vec3<f32>(grad * 14.0, 1.0));
+    let l = normalize(vec3<f32>(-0.4, -0.55, 0.73));
+    let diff = clamp(dot(n, l), 0.0, 1.0);
+    col *= 0.78 + 0.55 * diff * (0.4 + 0.6 * u.u_params.x);
+
+    // A faint sheen only on the steepest crests, for sparkle.
+    let spec = pow(clamp(dot(reflect(-l, n), vec3<f32>(0.0, 0.0, 1.0)), 0.0, 1.0), 40.0);
+    col = mix(col, vec3<f32>(0.9, 0.94, 1.0), spec * 0.15);
 
     return vec4<f32>(col, 1.0);
 }

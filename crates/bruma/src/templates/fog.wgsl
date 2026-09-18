@@ -46,7 +46,8 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
     var out: VsOutput;
     out.position = vec4<f32>(positions[idx], 0.0, 1.0);
     // UVs with Y pointing up, shadertoy-style.
-    out.uv = vec2<f32>(uvs[idx].x, 1.0 - uvs[idx].y);
+    // Engine orientation contract (same as image.wgsl): uv.y = 0 at the top.
+    out.uv = uvs[idx];
     return out;
 }
 
@@ -89,7 +90,9 @@ fn daylight() -> f32 {
 
 @fragment
 fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
-    let uv = in.uv;
+    // uv.y = 0 at the BOTTOM (look was composed pre-contract; one flip
+    // keeps the mountains at the horizon and the density gradient).
+    let uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
     let day = daylight();
     let speed = 0.2 + 0.8 * U.u_params.x;
     let density = U.u_params.y;

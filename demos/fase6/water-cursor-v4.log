@@ -1,0 +1,18 @@
+[bruma] INFO: bruma run — mode animated shader (30 fps)
+[bruma] INFO: logind graphical session: /org/freedesktop/login1/session/_34 (Type=wayland)
+[bruma] INFO: initial state: session unlocked (LockedHint=false)
+[bruma] INFO: initial state: on AC power (UPower State=4)
+[bruma] INFO: logind graphical session: /org/freedesktop/login1/session/_34 (Type=wayland)
+[bruma] INFO: global pause: lock source available (logind), battery source available (UPower)
+[bruma] INFO: Found 6 cooperative matrix configurations supported by wgpu
+[bruma] INFO: wgpu: adapter AMD Radeon 660M (RADV REMBRANDT) (IntegratedGpu), backend Vulkan (shared across outputs)
+[bruma] INFO: toplevel 'Sniper3' fullscreen=true (states: [3, 2])
+[bruma] INFO: texture 0 loaded: /home/abstem/.local/share/bruma/wallpapers/demo-ripple/0.1.0/assets/water-cursor.jpg (1920x1200)
+[bruma] INFO: background surface created on output Some("eDP-1")
+[bruma] INFO: texture 0 loaded: /home/abstem/.local/share/bruma/wallpapers/demo-ripple/0.1.0/assets/water-cursor.jpg (1920x1200)
+[bruma] INFO: background surface created on output Some("HDMI-A-1")
+[bruma] INFO: pointer capability bound (mouse position available)
+[bruma] INFO: wallpaper active on Some("eDP-1"): 1920x1200px, scale 1 (gpu) — Ctrl-C to exit
+[bruma] INFO: wallpaper active on Some("HDMI-A-1"): 2560x1440px, scale 1 (gpu) — Ctrl-C to exit
+[bruma] INFO: output Some("eDP-1"): fullscreen pause = false
+[bruma] INFO: output Some("HDMI-A-1"): fullscreen pause = true

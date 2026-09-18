@@ -111,6 +111,14 @@ const UNIFORM_SIZE: u64 = 64;
 /// (sampler).
 const TEXTURE_SLOTS: usize = 4;
 
+/// Offscreen target format for feedback wallpapers (the creator's
+/// pipeline renders here and reads the result back next frame). fp16
+/// WITHOUT an sRGB gamma curve: the stored value IS the sim state, and
+/// an 8-bit sRGB target quantizes it into banding that the wave math
+/// then freezes in place (rings that never fade). fp16 keeps the state
+/// continuous frame to frame.
+pub const SIM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
 /// Bind group layout of group 1: the wallpaper's PREVIOUS frame
 /// (`feedback` permission). One texture + one sampler; pipelines always
 /// carry it so hot-reload can switch between feedback and non-feedback
@@ -143,7 +151,7 @@ pub fn prev_frame_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLay
 /// Blit shader for the feedback path: copies the offscreen frame where
 /// the creator's shader just painted onto the swapchain texture. Reads
 /// group 1 (the same layout the feedback shader uses for its input).
-const BLIT_WGSL: &str = r#"
+pub const BLIT_WGSL: &str = r#"
 @group(1) @binding(0)
 var prev_tex: texture_2d<f32>;
 
@@ -164,14 +172,17 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
         vec2<f32>( 1.0, -1.0),
     );
     let uvs = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 1.0),
         vec2<f32>(0.0, 0.0),
         vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
     );
 
     var out: VsOutput;
     out.position = vec4<f32>(positions[idx], 0.0, 1.0);
+    // Same orientation contract as the creator shaders' vertices
+    // (uv.y = 0 at the top of the target): a blit of an upright frame
+    // must stay upright.
     out.uv = uvs[idx];
     return out;
 }
@@ -205,13 +216,14 @@ fn bruma_display_vs(@builtin(vertex_index) idx: u32) -> BrumaDisplayOut {
         vec2<f32>( 1.0, -1.0),
     );
     let uvs = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 1.0),
         vec2<f32>(0.0, 0.0),
         vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
     );
     var out: BrumaDisplayOut;
     out.position = vec4<f32>(positions[idx], 0.0, 1.0);
+    // Same orientation contract as the creator shaders' vertices.
     out.uv = uvs[idx];
     return out;
 }
@@ -1022,9 +1034,20 @@ impl AnimatedRenderer {
         display_ptr: NonNull<std::ffi::c_void>,
         surface_ptr: NonNull<std::ffi::c_void>,
         shader_path: &Path,
+        feedback: bool,
+        display_entry: bool,
     ) -> Result<Self, RendererError> {
         let shared = GpuShared::new()?;
-        unsafe { Self::on_shared(&shared, display_ptr, surface_ptr, shader_path) }
+        unsafe {
+            Self::on_shared(
+                &shared,
+                display_ptr,
+                surface_ptr,
+                shader_path,
+                feedback,
+                display_entry,
+            )
+        }
     }
 
     /// Creates the animated renderer on a shared GPU (Phase 5: one GPU
@@ -1039,6 +1062,8 @@ impl AnimatedRenderer {
         display_ptr: NonNull<std::ffi::c_void>,
         surface_ptr: NonNull<std::ffi::c_void>,
         shader_path: &Path,
+        feedback: bool,
+        display_entry: bool,
     ) -> Result<Self, RendererError> {
         let ctx = unsafe { SurfaceCtx::new_wayland(shared, display_ptr, surface_ptr)? };
 
@@ -1152,8 +1177,20 @@ impl AnimatedRenderer {
             &view_refs,
             &sampler_refs,
         );
-        let pipeline =
-            Self::build_pipeline(&ctx, &source, &bind_group_layout, Some(&prev_frame_layout))?;
+        // A feedback shader's fs_main is a SIM pass into the fp16
+        // offscreen targets: its pipeline must target SIM_FORMAT, never
+        // the swapchain format (rendering a sim into an 8-bit sRGB
+        // target quantizes the state into rings that never fade — the
+        // frozen-water bug). The mode flags are constructor arguments so
+        // this decision happens BEFORE the first pipeline exists.
+        let shader_format = if feedback { SIM_FORMAT } else { ctx.format() };
+        let pipeline = Self::build_pipeline(
+            &ctx,
+            shader_format,
+            &source,
+            &bind_group_layout,
+            Some(&prev_frame_layout),
+        )?;
 
         let renderer = Self {
             ctx,
@@ -1170,31 +1207,13 @@ impl AnimatedRenderer {
             param_overrides: Vec::new(),
             texture_views: initial_views,
             texture_samplers: initial_samplers,
-            feedback: false,
-            display_entry: false,
+            feedback,
+            display_entry,
             creator_source: source.clone(),
             prev_frame_layout,
             ping_pong: None,
         };
         Ok(renderer)
-    }
-
-    /// Enables the previous-frame input (manifest `feedback`
-    /// permission). Must be called before the first frame.
-    ///
-    /// Every pipeline already carries the group-1 layout (unused by
-    /// non-feedback shaders, so nothing to rebuild); this only arms the
-    /// offscreen ping-pong, allocated lazily on the first frame.
-    pub fn set_feedback(&mut self) {
-        self.feedback = true;
-    }
-
-    /// Declares that the shader renders through a `display(uv, frame, u)`
-    /// entry (creator-owned presentation of the offscreen state, e.g.
-    /// water over a photo). The internal blit then runs `fs_display`.
-    /// Must be called before the first frame.
-    pub fn set_display_entry(&mut self) {
-        self.display_entry = true;
     }
 
     /// Sets THIS output's parameter overrides (Phase 5).
@@ -1338,9 +1357,12 @@ impl AnimatedRenderer {
     }
 
     /// Compiles the shader and builds the pipeline with bruma's standard
-    /// layout (uniform block on group 0, binding 0).
+    /// layout (uniform block on group 0, binding 0). `format` is the
+    /// pass's target: [`SIM_FORMAT`] for the sim pass of a feedback
+    /// shader, the output's swapchain format otherwise.
     fn build_pipeline(
         ctx: &SurfaceCtx,
+        format: wgpu::TextureFormat,
         source: &str,
         bind_group_layout: &wgpu::BindGroupLayout,
         prev_frame_layout: Option<&wgpu::BindGroupLayout>,
@@ -1349,7 +1371,7 @@ impl AnimatedRenderer {
 
         Ok(build_quad_pipeline(
             ctx.device(),
-            ctx.format(),
+            format,
             &shader,
             bind_group_layout,
             prev_frame_layout,
@@ -1411,6 +1433,11 @@ impl AnimatedRenderer {
         self.creator_source = source.clone();
         match Self::build_pipeline(
             &self.ctx,
+            if self.feedback {
+                SIM_FORMAT
+            } else {
+                self.ctx.format()
+            },
             &source,
             &self.bind_group_layout,
             Some(&self.prev_frame_layout),
@@ -1577,10 +1604,11 @@ impl AnimatedRenderer {
         height: u32,
         format: wgpu::TextureFormat,
     ) -> Option<&'a mut PingPong> {
-        // The offscreen targets keep the SWAPCHAIN format: the creator's
-        // pipeline then renders into either surface with zero format
-        // juggling, and the blit round-trips byte-identically (srgb view
-        // decodes on sample, srgb attachment re-encodes on store).
+        // The offscreen targets are fp16 LINEAR (SIM_FORMAT): the stored
+        // value is the creator's sim state and must stay continuous — an
+        // 8-bit sRGB target quantizes it into bands the wave math then
+        // freezes. The creator pipeline targets this same format; only
+        // the display blit writes the swapchain.
         let rebuild = match &*slot {
             Some(pp) => pp.size != (width, height),
             None => true,
@@ -1596,7 +1624,7 @@ impl AnimatedRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format,
+                format: SIM_FORMAT,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
