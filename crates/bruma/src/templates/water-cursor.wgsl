@@ -137,18 +137,22 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         h += hat * 0.28 * push * (0.3 + 0.7 * U.u_params.x);
     }
 
-    // Ambient life: a tiny random drop every ~0.4 s, position hashed
-    // from the interval index (deterministic across texels — exactly
-    // one drop per interval). A resting pond is never a dead photo:
-    // faint rings keep crossing it forever, and the initial "layer of
-    // water" look survives as long as the wallpaper runs.
+    // Ambient life: THREE tiny random drops every 0.4 s (positions
+    // hashed from the interval index — deterministic across texels,
+    // exactly one drop each, ~7.5 drops/s). A resting pond is never a
+    // dead photo: overlapping faint rings keep the surface alive
+    // forever — the initial "layer of water" look survives as long as
+    // the wallpaper runs.
     {
         let k = floor(U.u_time / 0.4);
-        let r1 = fract(sin(k * 127.1) * 43758.5453);
-        let r2 = fract(sin(k * 269.5) * 18343.8235);
-        let d = distance(in.uv * U.u_res, vec2<f32>(r1, r2) * U.u_res);
-        let q = d * d / 500.0;
-        h += (q - 1.0) * exp(-q) * 0.055;
+        for (var j: i32 = 0; j < 3; j++) {
+            let s = k * 3.0 + f32(j);
+            let r1 = fract(sin(s * 127.1) * 43758.5453);
+            let r2 = fract(sin(s * 269.5) * 18343.8235);
+            let d = distance(in.uv * U.u_res, vec2<f32>(r1, r2) * U.u_res);
+            let q = d * d / 900.0;
+            h += (q - 1.0) * exp(-q) * 0.085;
+        }
     }
 
     // The pond always returns to calm: a very slow pull of the height

@@ -912,3 +912,12 @@ with should not die on battery just because the cord is out.
   "pause enabled", the flag says "disable it"; caught by the log).
 Verified live: on battery (UPower State=2) with the flag, no global
 pause line and the water keeps moving. 52 tests green.
+
+## 2026-09-17 — Ambient rain density: the pond layer now lasts forever
+The single 0.4 s drop was too sparse: rings died in ~20 s and between
+drops the surface looked dead again — the user saw the initial water
+layer vanish. Now THREE hashed drops per 0.4 s interval (~7.5 drops/s,
+bigger: sigma² 900, amplitude 0.085): overlapping young rings keep the
+layer permanently alive. WGSL gotcha for the record: `for (j in 0..3)`
+is not valid syntax — it is the C-style `for (var j: i32 = 0; ...)` in
+this naga version. 52 tests green.
