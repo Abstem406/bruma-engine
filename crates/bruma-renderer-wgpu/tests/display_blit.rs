@@ -22,6 +22,14 @@ use bruma_renderer_wgpu::{
 use image::ImageReader;
 
 const WATER_CURSOR_WGSL: &str = include_str!("../../bruma/src/templates/water-cursor.wgsl");
+/// The template as the engine serves it: prelude (texture fits) + raw
+/// source — exactly what the pipelines compile in production.
+fn template_source() -> String {
+    bruma_renderer_wgpu::with_prelude(
+        WATER_CURSOR_WGSL,
+        &[bruma_renderer_wgpu::TextureFit::Cover; bruma_renderer_wgpu::TEXTURE_SLOTS],
+    )
+}
 const LAKE_JPG: &[u8] = include_bytes!("../../bruma/src/templates/assets/water-cursor.jpg");
 
 // 512x320: readback rows stay 256-byte aligned at both 4 B (RGBA8:
@@ -122,7 +130,7 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
     });
 
     // ---- Display blit: creator source + append, entry fs_display ----
-    let combined = format!("{WATER_CURSOR_WGSL}\n{BLIT_DISPLAY_APPEND}");
+    let combined = format!("{}\n{BLIT_DISPLAY_APPEND}", template_source());
     let display_module = compile_wgsl(&device, &combined, "test-display-blit")
         .expect("creator+append must compile (production guard falls back to plain blit)");
     // Targets mirror the REAL swapchain format (sRGB): the display blit
@@ -139,7 +147,7 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
     // ---- Sim pipeline: creator's own fs_main, into the fp16 offscreen
     // format (exactly what the production renderer does) ----
     let sim_module =
-        compile_wgsl(&device, WATER_CURSOR_WGSL, "test-sim").expect("creator shader compiles");
+        compile_wgsl(&device, &template_source(), "test-sim").expect("creator shader compiles");
     let sim_pipeline = build_quad_pipeline_entry(
         &device,
         SIM_FORMAT,
@@ -753,7 +761,7 @@ fn wake_follows_the_cursor_on_screen_not_its_mirror() {
             sampler_entry(8),
         ],
     });
-    let combined = format!("{WATER_CURSOR_WGSL}\n{BLIT_DISPLAY_APPEND}");
+    let combined = format!("{}\n{BLIT_DISPLAY_APPEND}", template_source());
     let display_module = compile_wgsl(&device, &combined, "chain-display").expect("combined");
     let display_pipeline = build_quad_pipeline_entry(
         &device,
@@ -763,7 +771,7 @@ fn wake_follows_the_cursor_on_screen_not_its_mirror() {
         Some(&prev_layout),
         "fs_display",
     );
-    let sim_module = compile_wgsl(&device, WATER_CURSOR_WGSL, "chain-sim").expect("sim");
+    let sim_module = compile_wgsl(&device, &template_source(), "chain-sim").expect("sim");
     let sim_pipeline = build_quad_pipeline_entry(
         &device,
         SIM_FORMAT,
@@ -1097,7 +1105,7 @@ fn second_stroke_radiates_like_the_first() {
             sampler_entry(8),
         ],
     });
-    let combined = format!("{WATER_CURSOR_WGSL}\n{BLIT_DISPLAY_APPEND}");
+    let combined = format!("{}\n{BLIT_DISPLAY_APPEND}", template_source());
     let display_module = compile_wgsl(&device, &combined, "again-display").expect("combined");
     let display_pipeline = build_quad_pipeline_entry(
         &device,
@@ -1107,7 +1115,7 @@ fn second_stroke_radiates_like_the_first() {
         Some(&prev_layout),
         "fs_display",
     );
-    let sim_module = compile_wgsl(&device, WATER_CURSOR_WGSL, "again-sim").expect("sim");
+    let sim_module = compile_wgsl(&device, &template_source(), "again-sim").expect("sim");
     let sim_pipeline = build_quad_pipeline_entry(
         &device,
         SIM_FORMAT,

@@ -167,9 +167,12 @@
   reaction-diffusion, simulations) with an internal blit pass.
 - ✅ `mouse` permission wired: wl_pointer position feeds `u_mouse` while
   the cursor hovers the background (parallax works on an empty desktop).
-- Pending: parameter UI generated from the manifest (CLI/TUI),
-  cover/contain aspect handling for textures, MIME association for
-  drag-and-drop install.
+- ✅ Texture aspect fit (2026-09-18): `textures` entries accept the
+  plain path (v1, cover) or `{"path": ..., "fit": "cover"|"contain"}`;
+  the engine injects a prelude (`BRUMA_TEXi_FIT` + `bruma_texture_fit()`
+  helper) into every compiled pipeline — templates opt in, shaders that
+  don't use it are unaffected.
+- Pending: MIME association for drag-and-drop install.
 - Milestone (pending the UI): a person who does not code creates, packs
   and shares.
 

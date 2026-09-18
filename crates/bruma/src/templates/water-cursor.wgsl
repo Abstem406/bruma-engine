@@ -369,17 +369,8 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     // still (a true lock for A/B testing the ambient in isolation).
     let grad = grad_wake + ga * (1.1 * u.u_params.z);
 
-    // Cover-fit: fill the screen without distorting the photo.
-    let img = textureDimensions(tex0);
-    let screenAsp = u.u_res.x / u.u_res.y;
-    let imgAsp = f32(img.x) / f32(img.y);
-    var scale = vec2<f32>(1.0);
-    if (screenAsp > imgAsp) {
-        scale = vec2<f32>(1.0, imgAsp / screenAsp);
-    } else {
-        scale = vec2<f32>(screenAsp / imgAsp, 1.0);
-    }
-
+    // Aspect fit: the engine injects BRUMA_TEX0_FIT from the manifest
+    // (`fit: cover` fills the screen cropping; `contain` letterboxes).
     // SPREAD of the disturbance (wide 4-tap blur of the height field):
     // light scatters on disturbed water, so the reflection must extend
     // BEYOND the ring itself — this term lights the whole wake area,
@@ -394,7 +385,7 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
 
     // Refraction: a visible pull along the slope (~2-4 px at 1080p).
     // The photo stays sharp; the water reads through light + wobble.
-    let base = (uv - 0.5) * scale + 0.5;
+    let base = bruma_texture_fit(uv, tex0, u.u_res, BRUMA_TEX0_FIT);
     let bent = clamp(base + grad * 0.12, vec2<f32>(0.0), vec2<f32>(1.0));
     var col = textureSampleLevel(tex0, samp0, bent, 0.0).rgb;
 

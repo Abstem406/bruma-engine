@@ -18,5 +18,5 @@ mod manifest;
 mod store;
 
 pub use error::PackError;
-pub use manifest::{Manifest, Param, SCHEMA_VERSION};
+pub use manifest::{Manifest, Param, SCHEMA_VERSION, TextureFit, TextureSpec};
 pub use store::Store;

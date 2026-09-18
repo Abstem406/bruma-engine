@@ -1188,3 +1188,22 @@ reset [NAME]] [--output NAME]`.
 - Verified live on niri: set intensity 0.9 → effective params
   [0.90, ...] in the daemon log within a second, no restart. The
   user's original config was restored after the demo.
+
+## 2026-09-18 — Phase 6: texture aspect fit (cover/contain)
+
+- Manifest: `textures` entries are now `TextureSpec { path, fit }`,
+  parsed untagged — plain strings (v1 packages) mean cover, mappings
+  `{"path": ..., "fit": "cover"|"contain"}` declare the aspect mapping.
+  Unknown fits are rejected with the real parser (`texture_fit_forms`
+  test).
+- Renderer: `TextureFit` enum + WGSL prelude injected at the shader-file
+  readers (`on_shared`, `maybe_reload`) and after `set_textures` bakes
+  fits into the pipeline: constants `BRUMA_TEXi_FIT` (0 = cover, 1 =
+  contain) and `bruma_texture_fit(uv, tex, res, fit)`. One assembly
+  point (`with_prelude`) shared by pipelines AND the display blit, so
+  the creator's `display()` sees the helper too.
+- water-cursor template: its inline cover math is gone; it maps through
+  `bruma_texture_fit(uv, tex0, u.u_res, BRUMA_TEX0_FIT)` — first opt-in
+  consumer of the prelude.
+- Tests: manifest fit forms; the two template-compile guards (naga and
+  the GPU harness) now compile prelude+source exactly as production.

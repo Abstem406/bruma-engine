@@ -119,13 +119,81 @@ impl Uniforms {
     }
 }
 
+/// Assembles the shader's final WGSL: injected prelude + creator code.
+/// The single assembly point — pipelines AND the display blit (which
+/// concatenates the creator source + the internal append) share it, so
+/// `bruma_texture_fit` is visible everywhere the creator's `display`
+/// might call it.
+pub fn with_prelude(raw: &str, fits: &[TextureFit]) -> String {
+    format!("{}\n{}", texture_prelude(fits), raw)
+}
+
 /// Layout constant shared between platform and runtime.
 const UNIFORM_SIZE: u64 = 80;
 
 /// Texture slots of the fixed group-0 layout (matches the manifest's
 /// `textures` cap): slot i occupies bindings 2i+1 (texture) and 2i+2
 /// (sampler).
-const TEXTURE_SLOTS: usize = 4;
+pub const TEXTURE_SLOTS: usize = 4;
+
+/// Aspect mapping of one texture slot onto the output (Phase 6: the
+/// manifest declares `fit` per texture; plain strings mean cover).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextureFit {
+    /// Fill the screen, cropping the overflow (the wallpaper default).
+    #[default]
+    Cover,
+    /// Fit entirely, letterboxing (bars stay at the sampled edges).
+    Contain,
+}
+
+/// WGSL prelude injected before the creator's source: per-slot fit
+/// constants plus the mapping helper the templates use. Injected in ONE
+/// place (the shader-file readers), so every pipeline — first build and
+/// hot-reloads — sees the same declarations regardless of which slots
+/// the shader actually samples.
+fn texture_prelude(fits: &[TextureFit]) -> String {
+    let mut prelude = String::from("// bruma engine prelude (texture fits)\n");
+    for (i, fit) in fits.iter().enumerate().take(TEXTURE_SLOTS) {
+        let v = match fit {
+            TextureFit::Cover => 0.0,
+            TextureFit::Contain => 1.0,
+        };
+        prelude.push_str(&format!("const BRUMA_TEX{i}_FIT: f32 = {v};\n"));
+    }
+    for i in fits.len().max(1)..TEXTURE_SLOTS {
+        prelude.push_str(&format!("const BRUMA_TEX{i}_FIT: f32 = 0.0;\n"));
+    }
+    prelude.push_str(
+        "\
+// Maps screen uv to the texture's uv for its declared fit (cover fills
+// the screen cropping the overflow; contain fits fully, letterboxing).
+// `res` is the output resolution (the shader's u.u_res).
+fn bruma_texture_fit(
+    uv: vec2<f32>,
+    tex: texture_2d<f32>,
+    res: vec2<f32>,
+    fit: f32,
+) -> vec2<f32> {
+    let screenAsp = res.x / res.y;
+    let img = textureDimensions(tex);
+    let imgAsp = f32(img.x) / f32(img.y);
+    var scale = vec2<f32>(1.0);
+    if (screenAsp > imgAsp) {
+        scale = vec2<f32>(1.0, imgAsp / screenAsp);
+    } else {
+        scale = vec2<f32>(screenAsp / imgAsp, 1.0);
+    }
+    if (fit < 0.5) {
+        return (uv - 0.5) * scale + 0.5;
+    }
+    let fill = select(screenAsp / imgAsp, imgAsp / screenAsp, screenAsp > imgAsp);
+    return (uv - 0.5) * fill + 0.5;
+}
+",
+    );
+    prelude
+}
 
 /// Offscreen target format for feedback wallpapers (the creator's
 /// pipeline renders here and reads the result back next frame). fp16
@@ -1003,6 +1071,9 @@ pub struct AnimatedRenderer {
     /// and used to compile the display blit, which concatenates the
     /// creator code + the internal append).
     creator_source: String,
+    /// Declared aspect fit per texture slot (drives the injected
+    /// prelude; set together with the textures in `set_textures`).
+    texture_fits: [TextureFit; TEXTURE_SLOTS],
     /// The shader declares `fn display(uv, frame, u)` — the feedback blit
     /// runs it through `fs_display` so the creator controls how the
     /// offscreen state reaches the screen (water over a photo).
@@ -1162,11 +1233,15 @@ impl AnimatedRenderer {
     ) -> Result<Self, RendererError> {
         let ctx = unsafe { SurfaceCtx::new_wayland(shared, display_ptr, surface_ptr)? };
 
-        let source =
+        let raw =
             std::fs::read_to_string(shader_path).map_err(|source| RendererError::ShaderIo {
                 path: shader_path.to_owned(),
                 source,
             })?;
+        // Placeholder fits until set_textures declares the real ones
+        // (all cover — the wallpaper default): the pipeline must exist
+        // before the CLI can hand over textures.
+        let source = with_prelude(&raw, &[TextureFit::default(); TEXTURE_SLOTS]);
 
         let uniform_buf = ctx.device().create_buffer(&wgpu::BufferDescriptor {
             label: Some("bruma-uniforms"),
@@ -1310,6 +1385,7 @@ impl AnimatedRenderer {
             feedback,
             display_entry,
             creator_source: source.clone(),
+            texture_fits: [TextureFit::default(); TEXTURE_SLOTS],
             prev_frame_layout,
             ping_pong: None,
         };
@@ -1381,9 +1457,34 @@ impl AnimatedRenderer {
     /// external-image copy is web-only). Failure degrades to black
     /// textures and is logged: a missing image must not kill the
     /// wallpaper.
-    pub fn set_textures(&mut self, paths: &[String]) {
+    pub fn set_textures(&mut self, paths: &[String], fits: &[TextureFit]) {
         if paths.is_empty() {
             return;
+        }
+        self.texture_fits = [TextureFit::default(); TEXTURE_SLOTS];
+        for (i, fit) in fits.iter().enumerate().take(TEXTURE_SLOTS) {
+            self.texture_fits[i] = *fit;
+        }
+        // The prelude bakes the fits into the compiled shader: rebuild
+        // the pipeline (same mechanism as a hot-reload, but the source
+        // on disk is unchanged).
+        if let Ok(raw) = std::fs::read_to_string(&self.shader_path) {
+            let source = with_prelude(&raw, &self.texture_fits);
+            self.creator_source = source.clone();
+            match Self::build_pipeline(
+                &self.ctx,
+                if self.feedback {
+                    SIM_FORMAT
+                } else {
+                    self.ctx.format()
+                },
+                &source,
+                &self.bind_group_layout,
+                Some(&self.prev_frame_layout),
+            ) {
+                Ok(pipeline) => self.pipeline = pipeline,
+                Err(e) => log::warn!("texture-fit prelude rejected: {e}"),
+            }
         }
         for (i, path) in paths.iter().enumerate() {
             if i >= TEXTURE_SLOTS {
@@ -1526,10 +1627,11 @@ impl AnimatedRenderer {
         }
         self.last_mtime = Self::mtime(&self.shader_path);
 
-        let Ok(source) = std::fs::read_to_string(&self.shader_path) else {
+        let Ok(raw) = std::fs::read_to_string(&self.shader_path) else {
             log::warn!("hot-reload: could not read {}", self.shader_path.display());
             return;
         };
+        let source = with_prelude(&raw, &self.texture_fits);
         self.creator_source = source.clone();
         match Self::build_pipeline(
             &self.ctx,

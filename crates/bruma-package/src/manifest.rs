@@ -57,7 +57,29 @@ pub struct Manifest {
     pub params: Vec<Param>,
     /// Assets exposed to the shader as textures, in declaration order
     /// (binding `2i+1` / `2i+2`). Paths under `assets/`, png/jpg, max 4.
-    pub textures: Vec<String>,
+    /// Each carries its aspect `fit` (cover by default; the engine
+    /// injects a matching prelude the shader can use).
+    pub textures: Vec<TextureSpec>,
+}
+
+/// One declared texture: path + aspect fit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextureSpec {
+    /// Path under `assets/`, png/jpg.
+    pub path: String,
+    /// How the image maps to the screen (the engine injects a prelude
+    /// constant per slot; shaders use the `bruma_texture_fit` helper).
+    pub fit: TextureFit,
+}
+
+/// Aspect mapping of a texture onto the output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextureFit {
+    /// Fill the screen, cropping the overflow (a wallpaper default).
+    #[default]
+    Cover,
+    /// Fit entirely, letterboxing (bars left to the shader to shade).
+    Contain,
 }
 
 /// Textures-per-package cap (each is a binding pair in group 0).
@@ -95,7 +117,21 @@ struct ManifestRaw {
     #[serde(default)]
     params: Vec<ParamRaw>,
     #[serde(default)]
-    textures: Vec<String>,
+    textures: Vec<TextureSpecRaw>,
+}
+
+/// Accepts BOTH forms for `textures` entries: the plain path string
+/// (v1, fit = cover) and the mapping form `{ "path": ..., "fit":
+/// "cover"|"contain" }`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TextureSpecRaw {
+    Plain(String),
+    Mapped {
+        path: String,
+        #[serde(default)]
+        fit: Option<String>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -209,10 +245,25 @@ impl Manifest {
         }
 
         // Textures: safe paths under assets/, image extensions, no
-        // duplicates. Existence inside the zip is checked by the store
-        // (the manifest alone cannot know).
-        let mut textures = Vec::with_capacity(raw.textures.len());
-        for t in raw.textures {
+        // duplicates, known fit. Existence inside the zip is checked by
+        // the store (the manifest alone cannot know).
+        let mut textures: Vec<TextureSpec> = Vec::with_capacity(raw.textures.len());
+        for spec in raw.textures {
+            let (t, fit) = match spec {
+                TextureSpecRaw::Plain(t) => (t, TextureFit::Cover),
+                TextureSpecRaw::Mapped { path, fit } => {
+                    let fit = match fit.as_deref() {
+                        None | Some("cover") => TextureFit::Cover,
+                        Some("contain") => TextureFit::Contain,
+                        Some(other) => {
+                            return Err(PackError::BadParam(format!(
+                                "texture '{path}': unknown fit '{other}' (cover | contain)"
+                            )));
+                        }
+                    };
+                    (path, fit)
+                }
+            };
             let ext = Path::new(&t)
                 .extension()
                 .and_then(|e| e.to_str())
@@ -227,12 +278,12 @@ impl Manifest {
                     "texture '{t}': must be a safe path under assets/"
                 )));
             }
-            if textures.contains(&t) {
+            if textures.iter().any(|s| s.path == t) {
                 return Err(PackError::BadParam(format!(
                     "texture '{t}': declared twice"
                 )));
             }
-            textures.push(t);
+            textures.push(TextureSpec { path: t, fit });
         }
         if textures.len() > MAX_TEXTURES {
             return Err(PackError::BadParam(format!(
@@ -334,7 +385,7 @@ impl fmt::Display for Manifest {
                 f,
                 "texture {}: {} (binding {}/{})",
                 i,
-                t,
+                t.path,
                 2 * i + 1,
                 2 * i + 2
             )?;
@@ -467,7 +518,15 @@ mod tests {
             "textures": ["assets/mask.png", "assets/photo.jpg"],"#,
         );
         let m = Manifest::parse(&json).unwrap();
-        assert_eq!(m.textures, vec!["assets/mask.png", "assets/photo.jpg"]);
+        assert_eq!(
+            m.textures
+                .iter()
+                .map(|s| s.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["assets/mask.png", "assets/photo.jpg"]
+        );
+        // Plain strings mean cover.
+        assert!(m.textures.iter().all(|s| s.fit == TextureFit::Cover));
 
         // Outside assets/: rejected.
         let json = base_json().replace(
@@ -503,6 +562,44 @@ mod tests {
             r#""preview": "preview.png","#,
             r#""preview": "preview.png",
             "textures": ["assets/a.png", "assets/b.png", "assets/c.png", "assets/d.png", "assets/e.png"],"#,
+        );
+        assert!(Manifest::parse(&json).is_err());
+    }
+
+    #[test]
+    fn texture_fit_forms() {
+        // Plain string (v1): cover.
+        let m = Manifest::parse(&base_json()).unwrap();
+        assert!(m.textures.is_empty());
+
+        // Mapping form: both fits, and missing fit = cover.
+        let json = base_json().replace(
+            r#""preview": "preview.png","#,
+            r#""preview": "preview.png",
+            "textures": [
+                {"path": "assets/wide.jpg", "fit": "cover"},
+                {"path": "assets/tall.png", "fit": "contain"},
+                {"path": "assets/implicit.jpg"},
+                "assets/plain.jpg"
+            ],"#,
+        );
+        let m = Manifest::parse(&json).unwrap();
+        let fits: Vec<_> = m.textures.iter().map(|s| s.fit).collect();
+        assert_eq!(
+            fits,
+            vec![
+                TextureFit::Cover,
+                TextureFit::Contain,
+                TextureFit::Cover,
+                TextureFit::Cover
+            ]
+        );
+
+        // Unknown fit: rejected.
+        let json = base_json().replace(
+            r#""preview": "preview.png","#,
+            r#""preview": "preview.png",
+            "textures": [{"path": "assets/x.jpg", "fit": "stretch"}],"#,
         );
         assert!(Manifest::parse(&json).is_err());
     }

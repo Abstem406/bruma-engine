@@ -323,7 +323,7 @@ fn check_entry_and_preview(
     manifest: &Manifest,
 ) -> Result<(), PackError> {
     let mut names: Vec<&str> = vec![&manifest.entry, &manifest.preview];
-    names.extend(manifest.textures.iter().map(|s| s.as_str()));
+    names.extend(manifest.textures.iter().map(|s| s.path.as_str()));
     for name in names {
         let file: ZipFile<'_, std::io::Cursor<&[u8]>> = archive
             .by_name(name)

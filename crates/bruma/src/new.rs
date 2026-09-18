@@ -228,14 +228,19 @@ mod tests {
     fn every_template_compiles_with_naga() {
         // Same validator the engine runs before touching the GPU: a
         // template that lands broken in a release fails here first.
+        // The source is assembled as in production: prelude (texture
+        // fits; water-cursor's bruma_texture_fit comes from it) + code.
         let failures: Vec<String> = TEMPLATES
             .iter()
             .filter_map(|t| {
-                let src = t.source;
+                let src = bruma_renderer_wgpu::with_prelude(
+                    t.source,
+                    &[bruma_renderer_wgpu::TextureFit::Cover; bruma_renderer_wgpu::TEXTURE_SLOTS],
+                );
                 let name = t.name;
-                let module = match naga::front::wgsl::parse_str(src) {
+                let module = match naga::front::wgsl::parse_str(&src) {
                     Ok(m) => m,
-                    Err(e) => return Some(format!("{name}: parse: {}", e.emit_to_string(src))),
+                    Err(e) => return Some(format!("{name}: parse: {}", e.emit_to_string(&src))),
                 };
                 let mut validator = naga::valid::Validator::new(
                     naga::valid::ValidationFlags::all(),

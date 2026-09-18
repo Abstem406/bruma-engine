@@ -373,7 +373,9 @@ enum Source {
     Shader {
         path: String,
         overrides: Vec<(usize, f32)>,
-        textures: Vec<String>,
+        /// Package texture files in manifest order (absolute paths) with
+        /// their declared aspect fit; empty for loose shaders.
+        textures: Vec<(String, bruma_renderer_wgpu::TextureFit)>,
         feedback: bool,
     },
     /// Static image.
@@ -484,7 +486,19 @@ fn resolve_source(
             textures: manifest
                 .textures
                 .iter()
-                .map(|rel| pkg_path.join(rel).display().to_string())
+                .map(|spec| {
+                    (
+                        pkg_path.join(&spec.path).display().to_string(),
+                        match spec.fit {
+                            bruma_package::TextureFit::Cover => {
+                                bruma_renderer_wgpu::TextureFit::Cover
+                            }
+                            bruma_package::TextureFit::Contain => {
+                                bruma_renderer_wgpu::TextureFit::Contain
+                            }
+                        },
+                    )
+                })
                 .collect(),
             feedback: manifest.permissions.iter().any(|p| p == "feedback"),
         };
@@ -846,7 +860,10 @@ fn run_command(args: &[String]) {
                 // Package textures (manifest `textures` order) go to the
                 // fixed slots before the first frame; empty for loose
                 // shaders.
-                renderer.set_textures(textures);
+                renderer.set_textures(
+                    &textures.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(),
+                    &textures.iter().map(|(_, f)| *f).collect::<Vec<_>>(),
+                );
                 if !overrides.is_empty() {
                     // THIS output's overrides (resolved by name against
                     // the manifest in the CLI).
