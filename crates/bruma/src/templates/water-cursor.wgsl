@@ -33,6 +33,10 @@ struct Uniforms {
     u_mouse: vec2<f32>,
     u_params: vec4<f32>,
     u_res: vec2<f32>,
+    // Cursor speed in buffer px/s (0 = still or unknown): the wake's
+    // strength follows it. The clock's 16-byte alignment (vec3 at
+    // offset 48) leaves exactly this gap free at 40.
+    mouse_speed: f32,
     u_clock: vec3<f32>,
 }
 
@@ -101,18 +105,20 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     v *= 0.995 - 0.01 * U.u_params.y; // damping: the wake fades in seconds
     var h = c.r + v;
 
-    // The pointer drips: a wide, STRONG Gaussian drop wherever the
-    // cursor is — rings that visibly expand across the whole photo.
-    // SATURATED: the drop only digs while the surface is not already
-    // dug past a quarter-depth, so a STILL cursor stops deepening its
-    // dent (a resting finger in water) while moving keeps stirring
-    // fresh calm water at full strength.
+    // The pointer injects energy proportional to its SPEED (px/s, the
+    // engine supplies it in the free uniform slot at offset 52): a still
+    // cursor stirs nothing (a resting finger in water), a moving one
+    // leaves a CONTINUOUS wake — not a chain of separate plops that cut
+    // the trail's continuity. One impulse per texel per frame, spread
+    // along the movement: the wave equation turns the dent into rings
+    // on its own.
     if (U.u_mouse.x >= 0.0) {
         let m = U.u_mouse * e;
         let d = distance(in.uv * U.u_res, m * U.u_res);
         let gauss = exp(-d * d / 1400.0);
-        let room = select(0.0, 1.0, c.r > -0.25);
-        h += gauss * -0.35 * (0.3 + 0.7 * U.u_params.x) * room;
+        // 2000 px/s => full strength; scaled by the intensity param.
+        let push = min(U.mouse_speed / 2000.0, 1.0);
+        h += gauss * -0.22 * push * (0.3 + 0.7 * U.u_params.x);
     }
 
     // Clamp: a runaway value (driver hiccup) can never poison the

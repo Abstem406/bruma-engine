@@ -85,8 +85,16 @@ struct Uniforms {
     mouse: [f32; 2],
     params: [f32; 4],
     res: [f32; 2],
+    /// Cursor speed in buffer px/s (0 = still or unknown): sim shaders
+    /// inject energy proportional to it (a continuous wake, not
+    /// repeated plops).
+    mouse_speed: f32,
+    /// WGSL alignment: vec3 sits at offset 48 (Rust's repr(C) would put
+    /// the array at 44 — this pad holds the WGSL position).
+    _pad44: f32,
+    /// Real-time clock `[h, m, s]` (WGSL offset 48).
     clock: [f32; 3],
-    _pad_end: [f32; 3],
+    _pad_end: [f32; 1],
 }
 
 // The block is uploaded to the GPU as raw bytes: padding-free by
@@ -945,6 +953,8 @@ pub struct AnimatedRenderer {
     /// Last configured size (to repaint after reload without waiting for
     /// a new configure).
     last_size: (u32, u32),
+    /// Previous pointer position (buffer px) for the speed term.
+    last_mouse: [f32; 2],
     /// Optional reload event callback (e.g. to turn a shader rejection
     /// into a desktop notification). Invoked on the loop's thread, never
     /// on the render path.
@@ -1016,6 +1026,24 @@ pub enum ReloadEvent {
 }
 
 impl AnimatedRenderer {
+    /// Cursor speed in buffer px/s for this frame, with per-output
+    /// continuity: a mouse state (x >= 0) that followed an unknown one
+    /// ((-1, -1)) starts a fresh trail instead of one huge jump across
+    /// the gap (output switch, cursor left the background).
+    fn mouse_speed(&mut self, state: &FrameState) -> f32 {
+        let now = [state.mouse_x, state.mouse_y];
+        let speed = if state.mouse_x >= 0.0 && self.last_mouse[0] >= 0.0 && state.delta > 0.0 {
+            let dx = now[0] - self.last_mouse[0];
+            let dy = now[1] - self.last_mouse[1];
+            (dx * dx + dy * dy).sqrt() / state.delta
+        } else {
+            0.0
+        };
+        self.last_mouse = now;
+        // Sanity clamp: a teleport-scale spike (output switch measured
+        // across the gap, a stalled frame) is not a wake.
+        speed.min(20_000.0)
+    }
     /// Creates the animated renderer from a `.wgsl` file.
     ///
     /// # Safety
@@ -1202,6 +1230,7 @@ impl AnimatedRenderer {
             dummy_prev,
             pipeline,
             last_size: (0, 0),
+            last_mouse: [-1.0, -1.0],
             on_reload: None,
             last_error: None,
             param_overrides: Vec::new(),
@@ -1495,6 +1524,7 @@ impl AnimatedRenderer {
             let Some(pp) = Self::ensure_ping_pong(
                 &mut self.ping_pong,
                 device,
+                self.ctx.queue(),
                 &self.bind_group_layout,
                 &self.prev_frame_layout,
                 self.display_entry,
@@ -1596,6 +1626,7 @@ impl AnimatedRenderer {
     fn ensure_ping_pong<'a>(
         slot: &'a mut Option<PingPong>,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         group0_layout: &wgpu::BindGroupLayout,
         prev_layout: &wgpu::BindGroupLayout,
         display_entry: bool,
@@ -1626,10 +1657,42 @@ impl AnimatedRenderer {
                 dimension: wgpu::TextureDimension::D2,
                 format: SIM_FORMAT,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             };
             let textures = [device.create_texture(&desc), device.create_texture(&desc)];
+            // GPU-zeroed memory is NOT the sim's rest state: the state
+            // encoding centers at 0.5 (see the templates' header), so a
+            // zero target reads as height -0.5 and the wave equation
+            // drives the whole field into the -1 clamp — a pinned fixed
+            // point where the cursor's drop gate can never open (the
+            // wallpaper dies as a static over-bright image). Initialize
+            // both targets to CALM (0.5, 0.5, 0.5, 1) as the contract
+            // says.
+            let calm: Vec<u8> = [0x00u8, 0x38, 0x00, 0x38, 0x00, 0x38, 0x00, 0x3C]
+                .repeat((width * height) as usize);
+            for t in &textures {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: t,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &calm,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 8),
+                        rows_per_image: None,
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             let views = [
                 textures[0].create_view(&wgpu::TextureViewDescriptor::default()),
                 textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
@@ -1767,8 +1830,10 @@ impl FrameRenderer for AnimatedRenderer {
             mouse: [state.mouse_x, state.mouse_y],
             params,
             res: [state.width as f32, state.height as f32],
+            mouse_speed: self.mouse_speed(state),
+            _pad44: 0.0,
             clock: state.clock,
-            _pad_end: [0.0; 3],
+            _pad_end: [0.0; 1],
         };
         self.ctx
             .queue()

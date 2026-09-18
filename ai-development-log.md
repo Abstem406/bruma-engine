@@ -840,3 +840,20 @@ deltas (mathematically present, invisible to the eye). Fixes:
   leaked into the mirror assertion — fp16 ULP math confirmed it).
 52 tests green. Proof of the working chain: probe screen turned RED
 (2.3M px) exactly while the cursor was over the background.
+
+## 2026-09-17 — Speed-proportional wake + uniform alignment fix
+User report: the effect worked for a moment, then each mouse move
+restarted the effect at the new point, cutting the trail's continuity.
+Root cause: the saturated gate injected a fixed impulse once per texel
+(calm water got one plop, then the gate closed) — a chain of separate
+plops, and accumulating energy pinned the field.
+- Engine: the uniform block gains `mouse_speed` (px/s, computed by the
+  renderer per output with continuity — an unknown->known transition
+  starts a fresh trail instead of one teleport-wide stroke).
+- water-cursor: injection is proportional to speed (still cursor =
+  nothing, 2000 px/s = full strength) — the WE-style continuous wake.
+- Alignment bug found on the way: WGSL vec3 `u_clock` sits at offset
+  48, but the engine had been writing it at 40 since Phase 3 (the fog
+  template read seconds as hours). The Rust struct now pads 44 and
+  mirrors WGSL exactly.
+52 tests green (display_blit's uniforms now simulate a moving cursor).

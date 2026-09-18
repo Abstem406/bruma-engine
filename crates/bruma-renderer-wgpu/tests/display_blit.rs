@@ -502,6 +502,18 @@ fn bind_group0(
 }
 
 fn write_uniforms(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2]) {
+    // A moving cursor (2000 px/s = full wake strength) whenever the
+    // mouse is known: the template injects energy proportional to
+    // speed, so a test that wants a wake must MOVE the cursor.
+    write_uniforms_speed(
+        queue,
+        buf,
+        mouse,
+        if mouse[0] >= 0.0 { 2000.0 } else { 0.0 },
+    );
+}
+
+fn write_uniforms_speed(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2], speed: f32) {
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct U {
@@ -510,8 +522,10 @@ fn write_uniforms(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2]) {
         mouse: [f32; 2],
         params: [f32; 4],
         res: [f32; 2],
+        mouse_speed: f32,
+        pad44: f32,
         clock: [f32; 3],
-        pad: [f32; 3],
+        pad: [f32; 1],
     }
     let u = U {
         time: 0.0,
@@ -519,8 +533,10 @@ fn write_uniforms(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2]) {
         mouse,
         params: [0.6, 0.35, 0.0, 0.0],
         res: [W as f32, H as f32],
+        mouse_speed: speed,
+        pad44: 0.0,
         clock: [12.0, 0.0, 0.0],
-        pad: [0.0; 3],
+        pad: [0.0; 1],
     };
     queue.write_buffer(buf, 0, unsafe {
         std::slice::from_raw_parts(&u as *const U as *const u8, 64)
