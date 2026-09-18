@@ -1126,3 +1126,16 @@ working "elsewhere".
   pointer-free equivalent; movement re-opens it.
 - Furrow depth raised to 0.35..0.65 so shed rings read at the scale
   the release blooms used to.
+
+## 2026-09-18 — Asymmetric relaxation: dig fast, fill slow (release bloom back)
+
+User: still no visible effect with the cursor on the desktop. The live
+log proved the engine WAS digging (6 wake STARTs, peaks 7819 px/s) —
+so the loss was perceptual: the speed-scaled furrow closed smoothly
+with the EMA on stop, smoothing away the big release ring; in another
+window the free pond radiated the accumulated energy, which read as
+"it only works in other windows".
+
+Water fills a hole slowly: dig toward the furrow at 0.5 (tracks the
+finger), refill at 0.04 — the dent lingers ~1 s and its rebound is the
+release ring again. Mid-drag radiation still 56%; total energy UP.

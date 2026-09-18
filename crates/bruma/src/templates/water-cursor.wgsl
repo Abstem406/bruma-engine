@@ -207,7 +207,20 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         // release rings of earlier builds — mid-drag energy was present
         // but under perception). The intensity param still scales it.
         let furrow = hat * w_vortex * (0.35 + 0.30 * push) * (0.3 + 0.7 * U.u_params.x);
-        let dh = (furrow - h) * 0.5;
+        // ASYMMETRIC RELAXATION — dig fast, fill slow. Water piles
+        // beside a moving finger instantly but fills the hole over
+        // seconds. Digging toward the furrow (target below h) runs at
+        // 0.5 so the dent tracks the cursor; REFILLING (target above
+        // h — the dent closing, e.g. after the finger stops or moves
+        // on) runs at 0.04: the depression LINGERS ~1 s and the wave
+        // equation turns its rebound into the big release ring — the
+        // visible bloom the speed-scaled furrow had smoothed away
+        // ("waves only show when I'm in another window": there the
+        // free pond finally radiated what the quick close had
+        // suppressed). Both phases are contractions toward bounded
+        // targets: nothing can accumulate.
+        let r = select(0.04, 0.5, furrow < h);
+        let dh = (furrow - h) * r;
         h += dh;
         v += dh * 2.0;
         // MOMENTUM = the carve's own delta (gain 2). dh is nonzero
