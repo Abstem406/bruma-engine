@@ -138,6 +138,7 @@ name = "bruma-runtime"
 version = "0.1.0"
 dependencies = [
  "bruma-core",
+ "log",
 ]
 
 [[package]]

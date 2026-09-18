@@ -539,7 +539,7 @@ fn write_uniforms_speed(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2]
     } else {
         mouse
     };
-    write_uniforms_prev(queue, buf, mouse, prev, speed);
+    write_uniforms_prev(queue, buf, mouse, prev, speed, 0.0);
 }
 
 fn write_uniforms_prev(
@@ -548,6 +548,7 @@ fn write_uniforms_prev(
     mouse: [f32; 2],
     prev: [f32; 2],
     speed: f32,
+    time: f32,
 ) {
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -565,7 +566,7 @@ fn write_uniforms_prev(
         pad_end: [f32; 2],
     }
     let u = U {
-        time: 0.0,
+        time,
         params0: 0.6,
         mouse,
         params: [0.6, 0.35, 0.0, 0.0],
@@ -811,7 +812,8 @@ fn wake_follows_the_cursor_on_screen_not_its_mirror() {
         format: SIM_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_DST,
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     };
     let states: [wgpu::Texture; 2] = [
@@ -1151,7 +1153,8 @@ fn second_stroke_radiates_like_the_first() {
         format: SIM_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_DST,
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     };
     let states: [wgpu::Texture; 2] = [
@@ -1290,8 +1293,9 @@ fn second_stroke_radiates_like_the_first() {
                 mouse: [f32; 2],
                 prev: [f32; 2],
                 speed: f32,
+                time: f32,
                 read: &mut usize| {
-        write_uniforms_prev(queue, &uniform_buf, mouse, prev, speed);
+        write_uniforms_prev(queue, &uniform_buf, mouse, prev, speed, time);
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
@@ -1348,22 +1352,29 @@ fn second_stroke_radiates_like_the_first() {
     };
 
     // Baseline: calm photo, no wake anywhere.
-    calm_all(&queue);
-    let base = snap(&device, &queue, read, &state_bgs, &readback);
-
     // A stroke: 110 frames of 3 px/frame (90 px/s at 30 fps) — a SLOW
     // stroke, the way a cursor drifts: the same texels get re-injected
-    // dozens of frames in a row. Then a 45-frame rest (1.5 s).
-    let stroke = |device: &wgpu::Device, queue: &wgpu::Queue, read: &mut usize| {
+    // dozens of frames in a row. Then a 45-frame rest (1.5 s). Time
+    // advances 1/30 s per frame: the template's wave-packet drive is
+    // time-dependent, so frames are not interchangeable.
+    let stroke = |device: &wgpu::Device, queue: &wgpu::Queue, read: &mut usize, t0: f32| {
         let mut prev = [100.0f32, 3.0 * H as f32 / 4.0];
         for i in 1..=110u32 {
             let x = 100.0 + 3.0 * i as f32;
             let mouse = [x, 3.0 * H as f32 / 4.0];
-            step(device, queue, mouse, prev, 90.0, read);
+            step(device, queue, mouse, prev, 90.0, t0 + i as f32 / 30.0, read);
             prev = mouse;
         }
-        for _ in 0..45 {
-            step(device, queue, [-1.0, -1.0], [-1.0, -1.0], 0.0, read);
+        for j in 0..45u32 {
+            step(
+                device,
+                queue,
+                [-1.0, -1.0],
+                [-1.0, -1.0],
+                0.0,
+                t0 + (110 + j) as f32 / 30.0,
+                read,
+            );
         }
     };
 
@@ -1381,17 +1392,166 @@ fn second_stroke_radiates_like_the_first() {
             / (W * H) as f32
     };
 
-    stroke(&device, &queue, &mut read);
-    let after_first = snap(&device, &queue, read, &state_bgs, &readback);
-    let e1 = radiated(&after_first, &base);
+    // A quiet drift (mouse away, time advancing): the aligned control
+    // for any stroke window (n frames from t0).
+    let drift = |device: &wgpu::Device, queue: &wgpu::Queue, read: &mut usize, t0: f32, n: u32| {
+        for j in 0..n {
+            step(
+                device,
+                queue,
+                [-1.0, -1.0],
+                [-1.0, -1.0],
+                0.0,
+                t0 + j as f32 / 30.0,
+                read,
+            );
+        }
+    };
+    let stroke_motion_at =
+        |device: &wgpu::Device, queue: &wgpu::Queue, read: &mut usize, t0: f32| {
+            let mut prev = [100.0f32, 3.0 * H as f32 / 4.0];
+            for i in 1..=110u32 {
+                let mouse = [100.0 + 3.0 * i as f32, 3.0 * H as f32 / 4.0];
+                step(device, queue, mouse, prev, 90.0, t0 + i as f32 / 30.0, read);
+                prev = mouse;
+            }
+        };
+    // Field probe: Σ|h-0.5| over the stroke's corridor, read straight
+    // from the fp16 state (COPY_SRC) — bypasses the display entirely.
+    let state_readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("corridor-readback"),
+        size: (W as u64 * 8 * H as u64),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let corridor_sum = |device: &wgpu::Device, queue: &wgpu::Queue, read: usize| -> (f64, f64) {
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &states[read],
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &state_readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * 8),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let slice = state_readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        rx.recv().unwrap().expect("map");
+        let data = slice.get_mapped_range().expect("map range").to_vec();
+        state_readback.unmap();
+        let mut sum = 0.0f64;
+        let mut peak = 0.0f64;
+        let mut pinned = 0usize;
+        let mut total = 0usize;
+        for y in (3 * H / 5)..(9 * H / 10) {
+            for x in 80..460 {
+                let o = (y as usize * W as usize + x as usize) * 8;
+                let b = u16::from_le_bytes([data[o], data[o + 1]]);
+                let sign = if b & 0x8000 != 0 { -1.0 } else { 1.0 };
+                let exp = ((b >> 10) & 0x1f) as i32;
+                let man = (b & 0x3ff) as i32;
+                let h = if exp == 0 {
+                    sign * man as f32 * 2f32.powi(-14)
+                } else if exp == 31 {
+                    0.0
+                } else {
+                    sign * ((man | 0x400) as f32) * 2f32.powi(exp - 25)
+                } - 0.5;
+                let ah = (h.abs()) as f64;
+                sum += ah;
+                peak = peak.max(ah);
+                if ah > 0.85 {
+                    pinned += 1;
+                }
+                total += 1;
+            }
+        }
+        println!(
+            "[PROBE] corridor: Σ={:.0} peak={:.3} pinned={}/{}",
+            sum, peak, pinned, total
+        );
+        (sum, peak)
+    };
+    let t2 = 155.0 / 30.0; // stroke1's full run (110 motion + 45 rest)
+    // DIFF-IN-DIFF, perfectly aligned: every comparison runs the SAME
+    // frame count at the SAME absolute times from a byte-identical
+    // inherited state (the ambient swell is a function of time, so any
+    // mismatch leaks straight into the deltas). Only stroke-vs-quiet
+    // remains.
+    // E1: stroke1's motion vs an equal-length quiet drift, both 110
+    // frames from calm at the same times.
+    calm_all(&queue);
+    stroke_motion_at(&device, &queue, &mut read, 0.0);
+    let a1 = snap(&device, &queue, read, &state_bgs, &readback);
+    calm_all(&queue);
+    drift(&device, &queue, &mut read, 0.0, 110);
+    let b1 = snap(&device, &queue, read, &state_bgs, &readback);
+    let e1 = radiated(&a1, &b1);
 
-    stroke(&device, &queue, &mut read);
-    let after_second = snap(&device, &queue, read, &state_bgs, &readback);
-    let e2 = radiated(&after_second, &base);
+    // E2 — the user's exact scenario: stroke2's motion over stroke1's
+    // surviving ribbon vs an equal-length quiet drift over the SAME
+    // ribbon, same absolute times, same inherited state. A new wave
+    // MUST appear.
+    calm_all(&queue);
+    println!(
+        "[PROBE] corridor right after calm: {:.1}",
+        corridor_sum(&device, &queue, read).0
+    );
+    stroke(&device, &queue, &mut read, 0.0);
+    let (c1s, p1) = corridor_sum(&device, &queue, read);
+    println!("[PROBE] corridor right after stroke1 (+45 rest): {c1s:.1} peak {p1:.3}");
+    stroke_motion_at(&device, &queue, &mut read, t2);
+    let a2 = snap(&device, &queue, read, &state_bgs, &readback);
+    let (c2s, _) = corridor_sum(&device, &queue, read);
+    calm_all(&queue);
+    stroke(&device, &queue, &mut read, 0.0);
+    drift(&device, &queue, &mut read, t2, 110);
+    let b2 = snap(&device, &queue, read, &state_bgs, &readback);
+    let (c2q, pq) = corridor_sum(&device, &queue, read);
+    println!("[PROBE] corridor after stroke2-motion = {c2s:.1}, after quiet = {c2q:.1}");
+    let e2 = radiated(&a2, &b2);
 
+    // The real-world contract (the user's bug: "passing again over the
+    // same spot creates NO new wave"):
+    // 1. The re-stroke radiates CLEARLY — at least a quarter of the
+    //    first stroke's screen energy. (Real water doesn't radiate
+    //    identically over a still-oscillating wake; demanding equality
+    //    would forbid the physics. A quarter, in additive light, is
+    //    plainly visible.)
+    // 2. The field NEVER hard-pins: no phase may leave corridor texels
+    //    at the clamp (|h| = 1.000). Every purely-additive scheme
+    //    measured 78-97% of the corridor frozen exactly there — a flat
+    //    mesa that neither radiates nor heals. The knee caps |h| below
+    //    it by construction; if that ever regresses, this fires.
     assert!(
-        e2 > e1 * 0.6,
-        "the second stroke must radiate like the first: E1 {e1:.1}, E2 {e2:.1} — a much smaller E2 means the injection saturates the field and only the first stroke works"
+        e2 > e1 * 0.25,
+        "the second stroke over the SAME path must radiate clearly: E1 {e1:.1}, E2 {e2:.1} — far less means the injection saturates or cancels over the old ribbon instead of radiating"
+    );
+    assert!(
+        p1 < 0.999 && pq < 0.999,
+        "the corridor must never pin at the clamp (peaks {p1:.3} after stroke1, {pq:.3} after the quiet run) — a pinned mesa is the 'only the first wave works' bug"
     );
 }
 

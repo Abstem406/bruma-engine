@@ -152,7 +152,6 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         let back = -normalize(vec2<f32>(0.0001) + ab);
         let rel = px - U.u_mouse;
         let cosb = dot(rel / max(length(rel), 0.0001), back);
-        let hat_d = (1.0 + 0.65 * cosb * cosb * cosb) * hat;
         // 450 px/s => full strength; scaled by the intensity param.
         // Floor at 35% while there is REAL movement (>5 px/s): slow
         // drifts must stay clearly VISIBLE, not just present. A purely
@@ -165,20 +164,78 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
             clamp(U.mouse_speed / 450.0, 0.35, 1.0),
             U.mouse_speed > 5.0,
         );
-        h += hat_d * 0.30 * push * (0.3 + 0.7 * U.u_params.x);
+        // CARVE, DON'T PILE. Additive kicks (height OR velocity) under
+        // a sustained same-sign push converge to a flat plateau pinned
+        // at the clamp — measured: after one stroke its own corridor
+        // peaked AT the clamp (84% pinned), and a re-stroke over the
+        // same path changed the state by <1%: "only the first wave
+        // works". So the pointer never ADDS: it RELAXES the height
+        // toward a furrow of fixed depth (a finger dragged through
+        // water digs a bounded trough). That is a contraction toward a
+        // bounded, mass-zero target — saturation is impossible by
+        // construction — and over an old ribbon the relaxation drags
+        // the pinned water BACK toward the furrow, a huge visible
+        // change: a fresh wave radiates on every pass, however many
+        // strokes crossed here already. Dose follows the distance
+        // crossed this frame (a resting finger digs nothing; a slow
+        // drag digs gently).
+        let seg = length(ab);
+        let dig = min(seg * 0.006, 0.35) * push * (0.3 + 0.7 * U.u_params.x);
+        let w_vortex = 1.0 + 0.65 * cosb * cosb * cosb;
+        h += (hat * w_vortex * 0.4 - h) * dig;
     }
 
-    // The pond always returns to calm: a slow pull of the height
-    // toward rest (0) heals any residual level drift long before the
-    // clamp could ever pin the field. A uniform level shift makes no
-    // gradient, so while it acts the surface looks still — invisible
-    // as motion, decisive for forever-alive water.
+    // The pond always returns to calm: a LINEAR pull of the height
+    // toward rest (0) — neutral by construction (a uniform level shift
+    // makes no gradient and heals at the same rate everywhere). A
+    // NON-linear pull was tried and measured poisonous: it extracts
+    // more from crests than from valleys, the pond's mean sinks every
+    // frame, and the whole field settles pinned near the pull's
+    // equilibrium — every stroke dead (the exact bug this file
+    // chased).
     h -= h * 0.002;
 
     // Clamp: a runaway value (driver hiccup) can never poison the
-    // field — NaN/Inf would otherwise persist forever.
+    // field — NaN/Inf would otherwise persist forever. On v this is a
+    // soft LIMITER (smooth compression, no kink at ±1): it bounds the
+    // wave amplitude so repeated carving can never ramp h into the
+    // clamp plateau (a flat mesa neither radiates nor heals — seen as
+    // 78-97% of the re-stroke corridor pinned at |h| = 1.000 with
+    // every purely-additive scheme). Mass-neutral; fades to nothing as
+    // |v| -> 0, so small waves pass untouched.
+    v = v * (1.0 + (v * v) * 0.5) / (1.0 + (v * v) * 1.5);
+    // Same protection on h, as a SOFT KNEE that is exact identity
+    // below 0.85 (the carve furrow lives at ~0.4-0.66, untouched) and
+    // smoothly compresses only the transients that would otherwise
+    // hit the clamp during a re-carve over an old ribbon (the edge
+    // Laplacian pumps h via v; measured: 78-97% of the corridor
+    // pinned at 1.000 without it). Odd function — mass-neutral.
+    let ah = abs(h);
+    h = sign(h) * select(
+        ah,
+        0.85 + (ah - 0.85) / (1.0 + (ah - 0.85) * 2.0),
+        ah > 0.85,
+    );
     h = clamp(h, -1.0, 1.0);
     v = clamp(v, -1.0, 1.0);
+
+    // NAN EXORCISM. clamp(NaN) is NaN in WGSL, and one NaN texel
+    // infects its neighbors through the stencil every frame, forever:
+    // growing dead islands where no wave can ever exist again (seen
+    // live as "the water layer dies" and "no new wave over here"). A
+    // non-finite texel (NaN fails every comparison, including with
+    // itself) resets to calm; an infection can then never outgrow one
+    // frame of spread around its seed.
+    if (h == h) {
+        h = clamp(h, -1.0, 1.0);
+    } else {
+        h = 0.0;
+    }
+    if (v == v) {
+        v = clamp(v, -1.0, 1.0);
+    } else {
+        v = 0.0;
+    }
 
     return vec4<f32>(h + 0.5, v + 0.5, 0.5, 1.0);
 }
@@ -292,11 +349,20 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
     // ADDITIVE light on disturbed water: reflection ADDS light instead
     // of only modulating the photo — multiplication alone can never
     // brighten pure black, and on a dark photo the wake would vanish.
-    // Rides the same slope as the diffuse bands (flat calm water adds
-    // nothing); scaled by intensity like every other term.
+    // COMPRESSIVE response (12s/(1+12s)) so slope never hard-caps, and
+    // BLOOM-STYLE HIGHLIGHT PROTECTION: the addition fades as the pixel
+    // approaches white (1 - luminance). Without it, an old ribbon plus
+    // its light stacked past the framebuffer's white clip — the whole
+    // wake area SATURATED to white and a re-stroke over the same path
+    // could add nothing visible ("passing again makes no wave", even
+    // though the physics below was radiating fine). With the (1-lum)
+    // factor the lit water plateaus just under the clip: every new
+    // kick keeps screen headroom.
     let slope = length(grad);
+    let lum = clamp(dot(col, vec3<f32>(0.299, 0.587, 0.114)), 0.0, 1.0);
     col += vec3<f32>(0.45, 0.55, 0.65)
-        * min(slope * 10.0, 1.0)
+        * (slope * 12.0) / (1.0 + slope * 12.0)
+        * (1.0 - lum)
         * (0.4 + 0.6 * u.u_params.x);
 
     // Scattered light across the disturbed area (the SPREAD term): a

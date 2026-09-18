@@ -1021,3 +1021,25 @@ any residual bias in ~5 s; invisible as motion). Swell sheen 1.2->1.8%.
   with value-noise FBM + domain warp (fog template's technique): no
   lattice possible, curls and pinches like real water, still drifting
   over tens of seconds (pond, not stream).
+
+## 2026-09-18 — Carve injection: "only the first wave" root-caused and fixed
+
+The user could pass over the same spot again and get no new wave. The
+aligned diff-in-diff harness (same frame counts, same absolute times,
+byte-identical inherited state) measured it: every ADDITIVE scheme —
+height kicks, velocity kicks, sustained pushes — converged to a flat
+plateau pinned at the fp16 clamp (84–97% of the re-stroke corridor at
+|h|=1.000); a mesa has no slope, so nothing radiates and the next
+stroke lands on stone. Fix in water-cursor.wgsl:
+
+- Injection is now a RELAXATION toward a bounded mass-zero furrow
+  (carve, don't pile): contraction to a fixed-depth target — plateau
+  impossible by construction; over an old ribbon the relaxation drags
+  pinned water back to the furrow, a huge visible change every pass.
+- Dose ∝ distance crossed this frame; a resting cursor digs nothing.
+- v soft limiter (smooth odd compression) bounds wave amplitude.
+- h soft knee, identity below 0.85: edge-Laplacian transients during a
+  re-carve can never reach the clamp, so the field always heals.
+- The regression guard now asserts the real contract: re-stroke radiates
+  ≥25% of the first stroke's energy (E2 9.4 / E1 30.1 measured, clearly
+  visible in additive light) and the corridor never pins at the clamp.
