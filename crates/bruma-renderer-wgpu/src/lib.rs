@@ -1079,7 +1079,11 @@ impl AnimatedRenderer {
                 log::info!(
                     "wake START: cursor {:.0} px/s → injecting {:.0}% (intensity {:.2}, damping {:.2}, ambient {:.2})",
                     speed,
-                    (speed / 800.0).min(1.0) * 100.0,
+                    if speed > 5.0 {
+                        (speed / 450.0).clamp(0.35, 1.0) * 100.0
+                    } else {
+                        0.0
+                    },
                     params[0],
                     params[1],
                     params[2],

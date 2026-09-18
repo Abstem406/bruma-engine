@@ -988,3 +988,16 @@ each), so the stroke integrates to exactly 0 for any geometry. Second
 line of defense: level-drift heal raised 0.08%->0.2% per frame (kills
 any residual bias in ~5 s; invisible as motion). Swell sheen 1.2->1.8%.
 52 tests green; demo v23 running.
+
+## 2026-09-18 — "only the first wave shows", round 2: perception floor
+
+- User still saw only the first stroke; offline sim proved the pond
+  RECOVERS (two-stroke test green even at 90 px/s). Root cause is
+  perceptual: push = speed/800 made slow strokes (90-200 px/s) inject
+  11-25% amplitude => ~4x less slope than the first fast stroke =>
+  invisible over a detailed photo.
+- Fix: speed->push mapping saturates at 450 px/s with a 35% floor for
+  any real movement (>5 px/s); telemetry matches (wake START %).
+- Pack pipeline gotchas re-learned: scaffold id comes from `title`
+  slug (directory name leaked into title); install path is
+  ~/.local/share/bruma/wallpapers/<id>/<ver>/main.wgsl.
