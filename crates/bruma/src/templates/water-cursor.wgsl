@@ -214,8 +214,9 @@ fn display(uv: vec2<f32>, frame: vec4<f32>, u: Uniforms) -> vec4<f32> {
         (swell(px + vec2<f32>(3.0, 0.0), u.u_time) - swell(px - vec2<f32>(3.0, 0.0), u.u_time)) / 6.0,
         (swell(px + vec2<f32>(0.0, 3.0), u.u_time) - swell(px - vec2<f32>(0.0, 3.0), u.u_time)) / 6.0,
     );
-    // `ambient` (u_params.z) scales the pond's breathing; 0 = still.
-    let grad = grad_wake + ga * (0.1 + 1.1 * u.u_params.z);
+    // `ambient` (u_params.z) scales the pond's breathing; 0 = fully
+    // still (a true lock for A/B testing the ambient in isolation).
+    let grad = grad_wake + ga * (1.1 * u.u_params.z);
 
     // Cover-fit: fill the screen without distorting the photo.
     let img = textureDimensions(tex0);
