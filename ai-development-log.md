@@ -1075,3 +1075,22 @@ entirely.
   dash-cut on curves. The engine now feeds a one-pole EMA of speed
   (~1/8 s, delta-scaled) and the shader gates at >1 px/s. A resting
   cursor still decays the EMA to 0 and ends the stroke.
+
+## 2026-09-18 — Waves radiate WHILE the cursor moves (mid-motion harness)
+
+User: "waves only appear when I stop moving the mouse". New mid-motion
+measurement (40-frame stroke snapshot vs an equal quiet drift) put a
+number on it: 15% radiated mid-drag, the rest blooming on release.
+
+Two couplings tried and rejected with numbers:
+- v-contraction toward a fixed kick (rate 0.5, local mask): mid-drag
+  2.3x better (33%) BUT slow strokes pinned h at the clamp — the
+  target+v/dig equilibrium sat above the bound and the carve fought a
+  losing battle.
+- v += dh (the carve's own delta, gain 2): dh is nonzero only while
+  the finger is actively changing the field, delivers while the stroke
+  passes (33% mid-drag), vanishes at the furrow (no accumulation, no
+  fighting), and is largest when re-carving an old ribbon. Gain 3 did
+  not scale (v limiter saturates).
+
+The two-stroke test now also asserts mid-motion radiation >= 15%.

@@ -1408,9 +1408,9 @@ fn second_stroke_radiates_like_the_first() {
         }
     };
     let stroke_motion_at =
-        |device: &wgpu::Device, queue: &wgpu::Queue, read: &mut usize, t0: f32| {
+        |device: &wgpu::Device, queue: &wgpu::Queue, read: &mut usize, t0: f32, n: u32| {
             let mut prev = [100.0f32, 3.0 * H as f32 / 4.0];
-            for i in 1..=110u32 {
+            for i in 1..=n {
                 let mouse = [100.0 + 3.0 * i as f32, 3.0 * H as f32 / 4.0];
                 step(device, queue, mouse, prev, 90.0, t0 + i as f32 / 30.0, read);
                 prev = mouse;
@@ -1503,7 +1503,7 @@ fn second_stroke_radiates_like_the_first() {
     // E1: stroke1's motion vs an equal-length quiet drift, both 110
     // frames from calm at the same times.
     calm_all(&queue);
-    stroke_motion_at(&device, &queue, &mut read, 0.0);
+    stroke_motion_at(&device, &queue, &mut read, 0.0, 110);
     let a1 = snap(&device, &queue, read, &state_bgs, &readback);
     calm_all(&queue);
     drift(&device, &queue, &mut read, 0.0, 110);
@@ -1522,7 +1522,7 @@ fn second_stroke_radiates_like_the_first() {
     stroke(&device, &queue, &mut read, 0.0);
     let (c1s, p1) = corridor_sum(&device, &queue, read);
     println!("[PROBE] corridor right after stroke1 (+45 rest): {c1s:.1} peak {p1:.3}");
-    stroke_motion_at(&device, &queue, &mut read, t2);
+    stroke_motion_at(&device, &queue, &mut read, t2, 110);
     let a2 = snap(&device, &queue, read, &state_bgs, &readback);
     let (c2s, _) = corridor_sum(&device, &queue, read);
     calm_all(&queue);
@@ -1532,6 +1532,24 @@ fn second_stroke_radiates_like_the_first() {
     let (c2q, pq) = corridor_sum(&device, &queue, read);
     println!("[PROBE] corridor after stroke2-motion = {c2s:.1}, after quiet = {c2q:.1}");
     let e2 = radiated(&a2, &b2);
+
+    // RADIATION WHILE MOVING — the user's live symptom: "waves appear
+    // only when I STOP the mouse". Split the stroke: 40 frames of
+    // motion, then snapshot against a 40-frame quiet drift at the same
+    // times. A stroke that radiates while dragging shows large screen
+    // energy mid-motion; one that only blooms on release shows ~0.
+    calm_all(&queue);
+    stroke_motion_at(&device, &queue, &mut read, 0.0, 40);
+    let mid = snap(&device, &queue, read, &state_bgs, &readback);
+    calm_all(&queue);
+    drift(&device, &queue, &mut read, 0.0, 40);
+    let mid_ref = snap(&device, &queue, read, &state_bgs, &readback);
+    let e_mid = radiated(&mid, &mid_ref);
+    println!("[PROBE] mid-motion radiation (40/110 frames): {e_mid:.1} (full-stroke E1 = {e1:.1})");
+    assert!(
+        e_mid > e1 * 0.15,
+        "the stroke must radiate WHILE the cursor moves (mid-motion {e_mid:.1} vs full-stroke {e1:.1}) — waves that only appear on release mean the momentum delivery is too slow"
+    );
 
     // The real-world contract (the user's bug: "passing again over the
     // same spot creates NO new wave"):

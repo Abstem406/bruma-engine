@@ -199,17 +199,25 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         let w_vortex = 1.0 + 0.65 * cosb * cosb * cosb;
         let dh = (hat * w_vortex * 0.4 - h) * dig;
         h += dh;
-        // MOMENTUM, same trick as the carve: v RELAXES toward the
-        // streaming kick instead of receiving additive kicks per frame
-        // (four additive schemes measured: any per-frame add over the
-        // same texels accumulates into the clamp — plateau, dead
-        // waves). A contraction toward a bounded target cannot
-        // accumulate: while the finger is over a texel v sits at the
-        // kick, and the moment it moves on the wave equation takes
-        // that momentum and radiates it as a free ring. Rate = dig
-        // (dose per distance): slow drifts barely stir, fast strokes
-        // kick hard — a real finger in water.
-        v += (hat * w_vortex * 0.5 - v) * dig;
+        v += dh * 2.0;
+        // MOMENTUM = the carve's own delta. Two measured defects of
+        // fancier couplings, both fixed by transmitting dh itself:
+        //  - v-contraction toward a fixed kick target fought the carve
+        //    (h* = target + v/dig exceeded the clamp on slow strokes:
+        //    the corridor pinned at 1.000 again);
+        //  - the same line with target ≈ 0 outside the hat was a
+        //    global damper eating in-flight rings ("waves appear only
+        //    when I stop the mouse" — mid-drag radiation measured 15%).
+        // dh is nonzero ONLY where the finger is actively changing the
+        // field: it delivers the impulse while the stroke passes (the
+        // mid-motion harness enforces ≥15% radiated mid-drag), stops
+        // the instant the furrow is reached (no accumulation, no
+        // fighting — h at target means dh = 0), and hits hardest when
+        // re-carving an old ribbon (h far from target). Gain 2: the
+        // transmitted impulse exceeds the height delta (louder rings
+        // while dragging) but stays bounded — dh vanishes at the
+        // furrow, so nothing can accumulate.
+        v += dh * 2.0;
     }
 
     // The pond always returns to calm: a LINEAR pull of the height
