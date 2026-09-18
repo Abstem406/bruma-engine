@@ -178,6 +178,16 @@
   applies it (default section, params reset to the new manifest's
   defaults, SIGHUP → live switch, verified with xdg-open on niri).
   Download → double click → wallpaper running.
+- ✅ Visual collection manager (2026-09-18): `bruma gallery [--port N]` —
+  a local web gallery served by the binary itself (loopback-only mini
+  HTTP server on std::net; ZERO new dependencies, D8). Grid of
+  installed wallpapers with their preview.png, "Set as wallpaper" /
+  "Uninstall" per card (the active one is protected), and a drag-and-
+  drop zone that installs `.wallpaper` files with the same validation
+  as `bruma install`. Auto-opens the browser; the UI is one embedded
+  HTML file (vanilla JS). Verified live with curl: list / install /
+  activate (SIGHUP → live switch) / uninstall guard / corrupt-package
+  rejection.
 - Milestone (ACHIEVED 2026-09-18): a person who does not code creates,
   packs and shares — `bruma new` scaffolds, `bruma pack` zips (validated
   with the real parser), `bruma params` tunes live, and a shared

@@ -228,6 +228,17 @@ impl Store {
             }
         }
     }
+
+    /// Removes an installed package (name + version). Fails only if the
+    /// directory cannot be deleted; a missing package is a `None`.
+    pub fn uninstall(&self, name: &str, version: &str) -> Result<bool, PackError> {
+        let dir = self.installed_path(name, version);
+        if !dir.join("wallpaper.json").is_file() {
+            return Ok(false);
+        }
+        fs::remove_dir_all(&dir)?;
+        Ok(true)
+    }
 }
 
 /// Opens a ZIP from memory, with limits. `Cursor` is `Read + Seek` and the
@@ -469,6 +480,18 @@ mod tests {
         assert!(err.contains("unsafe"), "{err}");
         // Nothing was written (not even staging): validation comes first.
         assert!(!dir.join("test").exists(), "garbage left in {:?}", dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn uninstall_removes_and_reports_missing() {
+        let bytes = zip_bytes(&bytes_of(&good_entries()));
+        let (store, dir) = temp_store("uninstall");
+        store.install(&bytes, "test", "0.1.0").unwrap();
+        assert!(store.uninstall("test", "0.1.0").unwrap());
+        assert!(store.installed().is_empty());
+        // Gone already: reported as false, not an error.
+        assert!(!store.uninstall("test", "0.1.0").unwrap());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

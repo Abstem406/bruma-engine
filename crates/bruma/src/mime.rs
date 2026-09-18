@@ -207,7 +207,7 @@ fn install_package_file(path: &str) -> bruma_package::Manifest {
 /// Applies the just-installed wallpaper: the default config section
 /// points at the package (per-output sections keep theirs — pin those
 /// with `bruma params --adopt`), then running daemons are SIGHUPed.
-fn apply_as_default(name: &str) {
+pub fn apply_as_default(name: &str) {
     let mut cfg = match config::Config::load() {
         Ok(Some(c)) => c,
         Ok(None) => config::Config::default(),

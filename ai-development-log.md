@@ -1230,3 +1230,31 @@ reset [NAME]] [--output NAME]`.
   params`'s job.
 - Content is testable: `mime_xml_declares_type_and_glob` and
   `desktop_entry_targets_open` pin the two files the desktop reads.
+
+## 2026-09-18 — Phase 6.5: `bruma gallery`, the visual collection manager
+
+- `bruma gallery [--port N]`: a local web gallery served by the binary
+  itself. Design call: a web UI on a loopback-only mini HTTP server
+  (`std::net`, hand-rolled — a POST body ≤ 8 KiB arrives with the head,
+  larger ones are read by the handler) instead of a native toolkit:
+  drag-and-drop of files is native to the browser, zero new
+  dependencies (D8), and the "window" is a browser tab the command
+  opens for you.
+- API (all curl-verified live): GET `/` (embedded UI), GET `/api/list`
+  (installed + active flag from the config's default section), GET
+  `/api/preview/N?v=V` (the package's preview.png), POST `/api/install`
+  (raw bytes → same validation as `bruma install`; corrupt ZIPs are
+  rejected with the real error), POST `/api/activate {name}` (reuses
+  `bruma open`'s apply path: default section + params reset + SIGHUP —
+  verified: the running daemon re-tuned live), POST `/api/uninstall
+  {name,version}` (the active wallpaper is protected).
+- UI: single embedded HTML file — grid of preview cards, "Set as
+  wallpaper" / "Uninstall" per card, drop zone for `.wallpaper` files,
+  4 s polling refresh, toast errors. Vanilla JS, no build step.
+- `Store::uninstall(name, version)` added (fs::remove_dir_all with the
+  usual guard) + unit test; the gallery refuses to remove the active
+  package.
+- Live-testing left the user's collection consistent: demo-water
+  (accidentally uninstalled by the curl test) rebuilt from the `water`
+  template and reinstalled; demo-ripple re-activated through the
+  gallery API itself.
