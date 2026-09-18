@@ -99,10 +99,13 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
             + (prev_at(in.uv - vec2<f32>(0.0, e.y)).r - 0.5);
 
     // Wave equation: velocity toward the neighborhood, height follows.
-    // Courant-safe for this stencil (c^2 <= 0.5); 0.4 makes the rings
-    // cross the screen in a couple of seconds.
-    var v = c.g + (sum - 4.0 * c.r) * 0.4;
-    v *= 0.995 - 0.01 * U.u_params.y; // damping: the wake fades in seconds
+    // Courant limit for this stencil is c^2 <= 0.5; 0.49 sends the
+    // rings across the whole screen in ~1.5 s and they reach far
+    // before dying.
+    var v = c.g + (sum - 4.0 * c.r) * 0.49;
+    // Damping: the wake survives for many seconds (0.2%/frame of
+    // velocity loss at damping 0); the param shortens it on demand.
+    v *= 0.998 - 0.005 * U.u_params.y;
     var h = c.r + v;
 
     // The pointer injects energy proportional to its SPEED (px/s, the
@@ -119,20 +122,20 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     if (U.u_mouse.x >= 0.0) {
         let m = U.u_mouse * e;
         let d = distance(in.uv * U.u_res, m * U.u_res);
-        let q = d * d / 1400.0;
+        let q = d * d / 1800.0;
         // (q - 1) * e^-q integrates to exactly 0 over the plane: the
         // center's dent is paid by the ring around it.
         let hat = (q - 1.0) * exp(-q);
-        // 1200 px/s => full strength; scaled by the intensity param.
-        let push = min(U.mouse_speed / 1200.0, 1.0);
-        h += hat * 0.20 * push * (0.3 + 0.7 * U.u_params.x);
+        // 1000 px/s => full strength; scaled by the intensity param.
+        let push = min(U.mouse_speed / 1000.0, 1.0);
+        h += hat * 0.28 * push * (0.3 + 0.7 * U.u_params.x);
     }
 
     // The pond always returns to calm: a very slow pull of the height
     // toward rest (0) heals any residual level drift. A uniform level
     // shift makes no gradient, so while it acts the surface looks
     // still — invisible as motion, decisive for forever-alive water.
-    h -= h * 0.002;
+    h -= h * 0.0008;
 
     // Clamp: a runaway value (driver hiccup) can never poison the
     // field — NaN/Inf would otherwise persist forever.

@@ -873,3 +873,17 @@ pond started full.
   drift heals; a uniform level shift makes no gradient, so it is
   invisible as motion. The pond is forever alive, forever calm at rest.
 52 tests green.
+
+## 2026-09-17 — Tune: stronger, longer-lasting, wider-spreading wake
+User feedback: the effect is good but should be a bit more intense and
+durable, with wider propagation. Physics knobs turned:
+- Propagation speed 0.40 -> 0.49 (Courant limit 0.5): rings cross the
+  whole screen in ~1.5 s and reach far before fading.
+- Velocity damping 0.995-0.01*d -> 0.998-0.005*d: the wake survives
+  for many seconds instead of ~2.
+- Drop: wider hat (sigma 1400 -> 1800), stronger (0.20 -> 0.28), full
+  strength at 1000 px/s (was 1200); defaults intensity 0.9, damping
+  0.15.
+- Level relaxation 0.2%/frame -> 0.08%/frame (still heals drift, keeps
+  out of the wake's way).
+52 tests green.
