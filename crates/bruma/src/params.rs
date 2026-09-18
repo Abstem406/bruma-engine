@@ -60,7 +60,7 @@ fn manifest_for(store: &Store, name: &str) -> (bruma_package::Manifest, PathBuf)
 
 /// SIGHUPs every running bruma daemon (best-effort; `bruma params` also
 /// works offline — the next start picks the config up).
-fn wake_daemons() {
+pub fn wake_daemons() {
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return;
     };

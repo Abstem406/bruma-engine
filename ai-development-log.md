@@ -1207,3 +1207,26 @@ reset [NAME]] [--output NAME]`.
   consumer of the prelude.
 - Tests: manifest fit forms; the two template-compile guards (naga and
   the GPU harness) now compile prelude+source exactly as production.
+
+## 2026-09-18 — Phase 6 CLOSED: MIME association (double-click install)
+
+- `bruma mime install|remove`: writes the shared-mime-info XML
+  (`application/x-bruma-wallpaper`, subclass of zip, `*.wallpaper` glob)
+  + `bruma-open.desktop` (Exec=bruma open %f) under
+  `$XDG_DATA_HOME`, then `update-mime-database` /
+  `update-desktop-database` (best-effort). Warns if `bruma` is not on
+  PATH. Verified: `xdg-mime query default` → `bruma-open.desktop`.
+- `bruma open FILE.wallpaper`: installs (same validations as `bruma
+  install`) AND applies it — the default config section points at the
+  package and running daemons get SIGHUPed (reuses
+  `params::wake_daemons`). Verified end-to-end on niri: `xdg-open
+  demo-fog.wallpaper` switched the default section to `demo-fog` and a
+  running config daemon picked it up live.
+- Live-testing bug fixed in the same pass: applying over a config whose
+  default section carried the previous package's params made the strict
+  config parser reject the whole file at restart (`intensidad` is not a
+  demo-fog param). `open` now resets the default section's params — a
+  new wallpaper starts from its manifest defaults; tuning is `bruma
+  params`'s job.
+- Content is testable: `mime_xml_declares_type_and_glob` and
+  `desktop_entry_targets_open` pin the two files the desktop reads.

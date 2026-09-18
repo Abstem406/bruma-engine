@@ -151,7 +151,7 @@
 - Verified compatibility: niri (reference), Hyprland, sway, KWin.
 - GNOME/Mutter remains a v1 non-goal.
 
-### Phase 6 — Creator tools (partially complete; see breakdown)
+### Phase 6 — Creator tools (COMPLETE, 2026-09-18)
 - ✅ Parameter UI (2026-09-18): `bruma params WALLPAPER [list | set NAME VALUE [--adopt] | reset [NAME]] [--output NAME]` — live tuning over an installed wallpaper: reads the manifest with the real parser (unknown names and out-of-range values rejected), persists overrides into `config.json` (per-output or default), SIGHUPs the running daemon and the change is visible instantly (verified on niri: `set intensity 0.9` → `[0.90, ...]` in the daemon log without restart; `--adopt` points a config section at the tuned package so CLI runs can be tuned too). No TUI by design (D8): a scriptable CLI over the config file, zero new dependencies (libc was already in the workspace).
 - ✅ `u_clock`: real local time (h/m/s) in the uniform block — day/night
   tints and clock wallpapers.
@@ -172,9 +172,16 @@
   the engine injects a prelude (`BRUMA_TEXi_FIT` + `bruma_texture_fit()`
   helper) into every compiled pipeline — templates opt in, shaders that
   don't use it are unaffected.
-- Pending: MIME association for drag-and-drop install.
-- Milestone (pending the UI): a person who does not code creates, packs
-  and shares.
+- ✅ MIME association (2026-09-18): `bruma mime install|remove` registers
+  `application/x-bruma-wallpaper` (shared-mime-info XML + desktop
+  entry → `bruma open %f`); `bruma open FILE.wallpaper` installs AND
+  applies it (default section, params reset to the new manifest's
+  defaults, SIGHUP → live switch, verified with xdg-open on niri).
+  Download → double click → wallpaper running.
+- Milestone (ACHIEVED 2026-09-18): a person who does not code creates,
+  packs and shares — `bruma new` scaffolds, `bruma pack` zips (validated
+  with the real parser), `bruma params` tunes live, and a shared
+  `.wallpaper` installs by double click. Phase 6 is COMPLETE.
 
 ### Phase 7 — Public presence (3-6 weeks)
 - Releases on GitHub Releases (binaries per target).
