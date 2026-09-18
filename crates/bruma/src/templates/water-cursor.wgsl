@@ -106,20 +106,33 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     var h = c.r + v;
 
     // The pointer injects energy proportional to its SPEED (px/s, the
-    // engine supplies it in the free uniform slot at offset 52): a still
-    // cursor stirs nothing (a resting finger in water), a moving one
-    // leaves a CONTINUOUS wake — not a chain of separate plops that cut
-    // the trail's continuity. One impulse per texel per frame, spread
-    // along the movement: the wave equation turns the dent into rings
-    // on its own.
+    // engine supplies it in the free uniform slot at offset 40): a
+    // still cursor stirs nothing (a resting finger in water), a moving
+    // one leaves a CONTINUOUS wake.
+    //
+    // MASS-NEUTRAL profile (Mexican hat): pressing water DOWN in the
+    // center raises a ring around it. A one-sided push would lower the
+    // field's mean with every stroke — and a wave equation never gives
+    // the mean back — so after minutes of play the pond would be pinned
+    // at the clamp and the wake would die. The hat keeps the level
+    // forever stable.
     if (U.u_mouse.x >= 0.0) {
         let m = U.u_mouse * e;
         let d = distance(in.uv * U.u_res, m * U.u_res);
-        let gauss = exp(-d * d / 1400.0);
-        // 2000 px/s => full strength; scaled by the intensity param.
-        let push = min(U.mouse_speed / 2000.0, 1.0);
-        h += gauss * -0.22 * push * (0.3 + 0.7 * U.u_params.x);
+        let q = d * d / 1400.0;
+        // (q - 1) * e^-q integrates to exactly 0 over the plane: the
+        // center's dent is paid by the ring around it.
+        let hat = (q - 1.0) * exp(-q);
+        // 1200 px/s => full strength; scaled by the intensity param.
+        let push = min(U.mouse_speed / 1200.0, 1.0);
+        h += hat * 0.20 * push * (0.3 + 0.7 * U.u_params.x);
     }
+
+    // The pond always returns to calm: a very slow pull of the height
+    // toward rest (0) heals any residual level drift. A uniform level
+    // shift makes no gradient, so while it acts the surface looks
+    // still — invisible as motion, decisive for forever-alive water.
+    h -= h * 0.002;
 
     // Clamp: a runaway value (driver hiccup) can never poison the
     // field — NaN/Inf would otherwise persist forever.

@@ -857,3 +857,19 @@ plops, and accumulating energy pinned the field.
   template read seconds as hours). The Rust struct now pads 44 and
   mirrors WGSL exactly.
 52 tests green (display_blit's uniforms now simulate a moving cursor).
+
+## 2026-09-17 — The pond stays alive: mass-neutral injection
+User report: the effect worked the first time, then died after a while.
+User's physical intuition: it must behave like a pond — water always
+there to move, always returning to calm.
+Root cause: injection pushed water DOWN only. Every stroke lowered the
+field's mean level, and a wave equation never restores the mean (it is
+conserved) — after minutes of play half the field sat pinned at the
+clamp, gradient-free, and the wake died. It worked at first because the
+pond started full.
+- Mexican-hat injection ((q-1)e^-q, integrates to exactly 0): pressing
+  the center down raises a ring around it — the level never drifts.
+- A slow 0.2%/frame relaxation pulls height toward rest: any residual
+  drift heals; a uniform level shift makes no gradient, so it is
+  invisible as motion. The pond is forever alive, forever calm at rest.
+52 tests green.
