@@ -1139,3 +1139,19 @@ window the free pond radiated the accumulated energy, which read as
 Water fills a hole slowly: dig toward the furrow at 0.5 (tracks the
 finger), refill at 0.04 — the dent lingers ~1 s and its rebound is the
 release ring again. Mid-drag radiation still 56%; total energy UP.
+
+## 2026-09-18 — Stamp chain: knots at per-frame cursor samples eliminated
+
+User screenshot: knots exactly at each frame's raw mouse position —
+"launches another animation point that doesn't connect". Root cause:
+the segment projection CLAMPS at its ends, and the end cap sits at the
+raw per-frame cursor sample; the clamp also rectified the hat's ring
+(nonzero mass). Plus the unmasked asymmetric relaxer dug toward ~0
+EVERYWHERE while the cursor moved, killing passing crests at 50%/frame.
+
+- STAMP CHAIN: the frame path is covered with overlapping full discs
+  (spacing 12 px vs sigma ~32 px); the dig uses the nearest stamp.
+  No ends, no rectified caps — a continuous welded tube.
+- The relaxer is masked by the cap's interior (act = max(-hat, 0)):
+  outside the footprint the wave equation owns the field.
+Mid-drag 25%, no pinning, total energy up (E1 54.4).

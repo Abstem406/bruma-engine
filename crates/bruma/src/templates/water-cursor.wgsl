@@ -152,25 +152,37 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         // the bounding box painted SQUARES on diagonal moves.
         let px = in.uv * U.u_res;
         let ab = U.u_mouse - U.u_mouse_prev;
-        let t = clamp(dot(px - U.u_mouse_prev, ab) / max(dot(ab, ab), 1.0), 0.0, 1.0);
-        let p = U.u_mouse_prev + t * ab;
+        let seg = length(ab);
+        // STAMP CHAIN. The frame's path is covered with overlapping
+        // full discs (spacing 12 px vs sigma ~32 px) and the dig uses
+        // the NEAREST one. A single segment projection has clamped
+        // ENDS — and the end cap sits exactly at each frame's raw
+        // cursor sample: periodic knots down the trail (user
+        // screenshot, knots exactly at per-frame mouse positions,
+        // "launches another animation point that doesn't connect").
+        // Stamps have no ends; overlapping caps weld into one
+        // continuous tube.
+        let k = u32(min(ceil(seg / 12.0), 12.0));
+        var best = 1e9;
+        var bc = U.u_mouse_prev;
+        for (var i = 0u; i < k; i = i + 1u) {
+            let c = U.u_mouse_prev + (f32(i) + 0.5) * ab / f32(k);
+            let d2 = dot(px - c, px - c);
+            if (d2 < best) {
+                best = d2;
+                bc = c;
+            }
+        }
+        let p = bc;
         let rel_stem = px - p;
-        let q = dot(rel_stem, rel_stem) / 1000.0;
+        let q = best / 1000.0;
         let hat = (q - 1.0) * exp(-q);
-        // Directional weighting — comet wake anchored at the cursor:
-        // full strength right behind the motion (1.65), neutral at the
-        // sides (1.0), calm ahead (0.35). The hat is compact (its support
-        // is ~5 sigma wide) while the weight varies over screen scale, so
-        // over the hat w is nearly constant: the stroke mass stays
-        // w(center) · 0 = 0 up to a second-order residue. The level
-        // healing below removes that residue every frame.
         // Directional weighting — comet wake, full strength right
         // behind the motion (1.65), neutral at the sides (1.0), calm
-        // ahead (0.35). ANCHORED AT THE SEGMENT PROJECTION p, not the
-        // cursor: the weight must vary smoothly ALONG the frame's path,
-        // or a fast stroke (a long segment) gets a discontinuous weight
-        // — periodic seams down the wake (user-measured: interruptions
-        // every few dozen px at medium speed).
+        // ahead (0.35). ANCHORED AT THE NEAREST STAMP p: the weight
+        // must vary smoothly ALONG the frame's path, or a fast stroke
+        // (a long segment) gets a discontinuous weight — periodic
+        // seams down the wake (user-measured).
         let back = -normalize(vec2<f32>(0.0001) + ab);
         let rel = px - p;
         let cosb = dot(rel / max(length(rel), 0.0001), back);
@@ -207,19 +219,17 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         // release rings of earlier builds — mid-drag energy was present
         // but under perception). The intensity param still scales it.
         let furrow = hat * w_vortex * (0.35 + 0.30 * push) * (0.3 + 0.7 * U.u_params.x);
-        // ASYMMETRIC RELAXATION — dig fast, fill slow. Water piles
-        // beside a moving finger instantly but fills the hole over
-        // seconds. Digging toward the furrow (target below h) runs at
-        // 0.5 so the dent tracks the cursor; REFILLING (target above
-        // h — the dent closing, e.g. after the finger stops or moves
-        // on) runs at 0.04: the depression LINGERS ~1 s and the wave
-        // equation turns its rebound into the big release ring — the
-        // visible bloom the speed-scaled furrow had smoothed away
-        // ("waves only show when I'm in another window": there the
-        // free pond finally radiated what the quick close had
-        // suppressed). Both phases are contractions toward bounded
-        // targets: nothing can accumulate.
-        let r = select(0.04, 0.5, furrow < h);
+        // ASYMMETRIC and LOCALLY MASKED. Inside the cap (q < 1, the
+        // tube's interior): dig fast (0.5 — tracks the finger),
+        // refill slow (0.04 — the dent lingers ~1 s and its rebound
+        // is the big release ring). OUTSIDE the cap the relaxer is
+        // OFF (act -> 0): the wave equation owns the field there, so
+        // shed rings and in-flight waves evolve untouched — the
+        // unmasked version dug toward ~0 EVERYWHERE while the cursor
+        // moved and killed every passing crest at 50%/frame ("waves
+        // only when I stop" + knots along the trail).
+        let act = max(-hat, 0.0);
+        let r = select(0.04, 0.5, furrow < h) * act;
         let dh = (furrow - h) * r;
         h += dh;
         v += dh * 2.0;
