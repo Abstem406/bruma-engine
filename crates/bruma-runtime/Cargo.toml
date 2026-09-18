@@ -10,3 +10,4 @@ publish = false
 
 [dependencies]
 bruma-core.workspace = true
+log.workspace = true

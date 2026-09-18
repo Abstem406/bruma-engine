@@ -963,6 +963,16 @@ pub struct AnimatedRenderer {
     last_size: (u32, u32),
     /// Previous pointer position (buffer px) for the speed term.
     last_mouse: [f32; 2],
+    /// Wake telemetry state: is a stroke in progress, and its peak
+    /// speed so far. One log line per stroke (start/end), never per
+    /// frame.
+    wake_active: bool,
+    wake_peak: f32,
+    /// Last logged effective params: log on CHANGE (the first frame is
+    /// the configure-time draw with defaults-zero; the animated frames
+    /// carry the manifest values — the log must show the transition,
+    /// not just the misleading first shot).
+    logged_params: [f32; 4],
     /// Optional reload event callback (e.g. to turn a shader rejection
     /// into a desktop notification). Invoked on the loop's thread, never
     /// on the render path.
@@ -1051,6 +1061,37 @@ impl AnimatedRenderer {
         // Sanity clamp: a teleport-scale spike (output switch measured
         // across the gap, a stalled frame) is not a wake.
         speed.min(20_000.0)
+    }
+
+    /// Wake telemetry: one INFO line when a stroke begins (cursor speed
+    /// and what the shader will actually inject) and one when it ends
+    /// (its peak). Hysteresis keeps mid-gesture pauses from flapping.
+    /// This is the creator's window into the wave: if these lines
+    /// appear, the pointer path works — what you SEE is then pure
+    /// shading.
+    fn log_wake(&mut self, speed: f32, params: &[f32; 4]) {
+        const START: f32 = 25.0;
+        const END: f32 = 12.0;
+        if !self.wake_active {
+            if speed >= START {
+                self.wake_active = true;
+                self.wake_peak = speed;
+                log::info!(
+                    "wake START: cursor {:.0} px/s → injecting {:.0}% (intensity {:.2}, damping {:.2}, ambient {:.2})",
+                    speed,
+                    (speed / 800.0).min(1.0) * 100.0,
+                    params[0],
+                    params[1],
+                    params[2],
+                );
+            }
+        } else {
+            self.wake_peak = self.wake_peak.max(speed);
+            if speed < END {
+                self.wake_active = false;
+                log::info!("wake END: peak {:.0} px/s", self.wake_peak);
+            }
+        }
     }
     /// Creates the animated renderer from a `.wgsl` file.
     ///
@@ -1239,6 +1280,9 @@ impl AnimatedRenderer {
             pipeline,
             last_size: (0, 0),
             last_mouse: [-1.0, -1.0],
+            wake_active: false,
+            wake_peak: 0.0,
+            logged_params: [-1.0; 4],
             on_reload: None,
             last_error: None,
             param_overrides: Vec::new(),
@@ -1833,6 +1877,18 @@ impl FrameRenderer for AnimatedRenderer {
         // updates last_mouse, so the previous position must be captured
         // BEFORE calling it.
         let mouse_prev = self.last_mouse;
+        let speed = self.mouse_speed(state);
+        self.log_wake(speed, &params);
+        if params != self.logged_params {
+            self.logged_params = params;
+            log::info!(
+                "effective params (u_params0..3): [{:.2}, {:.2}, {:.2}, {:.2}]",
+                params[0],
+                params[1],
+                params[2],
+                params[3],
+            );
+        }
         let uniforms = Uniforms {
             time: state.time,
             // Phase 3: `param0` defaulting to 0. The UI generated from
@@ -1841,7 +1897,7 @@ impl FrameRenderer for AnimatedRenderer {
             mouse: [state.mouse_x, state.mouse_y],
             params,
             res: [state.width as f32, state.height as f32],
-            mouse_speed: self.mouse_speed(state),
+            mouse_speed: speed,
             _pad44: 0.0,
             clock: state.clock,
             _pad60: 0.0,

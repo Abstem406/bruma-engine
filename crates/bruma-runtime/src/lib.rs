@@ -190,6 +190,14 @@ impl BasicRuntime {
     /// package, whose names come from the manifest.
     pub fn set_params(&mut self, mut params: Vec<ParamValue>) {
         params.truncate(4);
+        log::info!(
+            "runtime params set: {}",
+            params
+                .iter()
+                .map(|p| format!("{}={:.2}", p.name, p.value))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         self.params = params;
     }
 
