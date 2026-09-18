@@ -887,3 +887,16 @@ durable, with wider propagation. Physics knobs turned:
 - Level relaxation 0.2%/frame -> 0.08%/frame (still heals drift, keeps
   out of the wake's way).
 52 tests green.
+
+## 2026-09-17 — Trail follows fast cursors; ambient rain keeps the pond alive
+Two user observations: (1) at faster speeds the trail could not keep up
+(fixed-width drop, gaps between per-frame dents), (2) the initial
+"layer of water" faded after a while (a resting pond is a dead photo —
+no waves ever form again).
+- The drop WIDENS with per-frame travel (sigma grows to ~72 px at
+  2000 px/s): the wake covers the whole segment, no gaps.
+- Ambient life: one tiny random drop every ~0.4 s (position hashed
+  from the interval index — deterministic across texels, exactly one
+  drop per interval). Faint rings forever; the pond is never dead.
+Test cursor slowed to 800 px/s so the anti-mirror assertion keeps
+measuring what it claims with the widened drop. 52 green.

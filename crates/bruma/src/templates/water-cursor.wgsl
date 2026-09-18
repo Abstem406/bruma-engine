@@ -122,13 +122,33 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     if (U.u_mouse.x >= 0.0) {
         let m = U.u_mouse * e;
         let d = distance(in.uv * U.u_res, m * U.u_res);
-        let q = d * d / 1800.0;
+        // The drop WIDENS with the distance traveled this frame
+        // (~speed/30 s): a fast cursor covers 50-100 px per frame and
+        // a fixed-width Gaussian would leave gaps — the wake must
+        // cover the whole segment to follow the cursor.
+        let travel = U.mouse_speed / 30.0;
+        let sig2 = 1800.0 + min(2.0 * travel * travel, 23000.0);
+        let q = d * d / sig2;
         // (q - 1) * e^-q integrates to exactly 0 over the plane: the
         // center's dent is paid by the ring around it.
         let hat = (q - 1.0) * exp(-q);
         // 1000 px/s => full strength; scaled by the intensity param.
         let push = min(U.mouse_speed / 1000.0, 1.0);
         h += hat * 0.28 * push * (0.3 + 0.7 * U.u_params.x);
+    }
+
+    // Ambient life: a tiny random drop every ~0.4 s, position hashed
+    // from the interval index (deterministic across texels — exactly
+    // one drop per interval). A resting pond is never a dead photo:
+    // faint rings keep crossing it forever, and the initial "layer of
+    // water" look survives as long as the wallpaper runs.
+    {
+        let k = floor(U.u_time / 0.4);
+        let r1 = fract(sin(k * 127.1) * 43758.5453);
+        let r2 = fract(sin(k * 269.5) * 18343.8235);
+        let d = distance(in.uv * U.u_res, vec2<f32>(r1, r2) * U.u_res);
+        let q = d * d / 500.0;
+        h += (q - 1.0) * exp(-q) * 0.055;
     }
 
     // The pond always returns to calm: a very slow pull of the height

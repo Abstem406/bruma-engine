@@ -502,15 +502,12 @@ fn bind_group0(
 }
 
 fn write_uniforms(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2]) {
-    // A moving cursor (2000 px/s = full wake strength) whenever the
-    // mouse is known: the template injects energy proportional to
-    // speed, so a test that wants a wake must MOVE the cursor.
-    write_uniforms_speed(
-        queue,
-        buf,
-        mouse,
-        if mouse[0] >= 0.0 { 2000.0 } else { 0.0 },
-    );
+    // A moving cursor (800 px/s) whenever the mouse is known: the
+    // template injects energy proportional to speed AND widens the
+    // drop with the per-frame travel — 800 keeps the widened drop
+    // (sigma ~40 px here) 4 sigmas away from the mirror row, so the
+    // anti-mirror assertion measures what it claims to.
+    write_uniforms_speed(queue, buf, mouse, if mouse[0] >= 0.0 { 800.0 } else { 0.0 });
 }
 
 fn write_uniforms_speed(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2], speed: f32) {
