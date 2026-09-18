@@ -156,20 +156,28 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         // over the hat w is nearly constant: the stroke mass stays
         // w(center) · 0 = 0 up to a second-order residue. The level
         // healing below removes that residue every frame.
+        // Directional weighting — comet wake, full strength right
+        // behind the motion (1.65), neutral at the sides (1.0), calm
+        // ahead (0.35). ANCHORED AT THE SEGMENT PROJECTION p, not the
+        // cursor: the weight must vary smoothly ALONG the frame's path,
+        // or a fast stroke (a long segment) gets a discontinuous weight
+        // — periodic seams down the wake (user-measured: interruptions
+        // every few dozen px at medium speed).
         let back = -normalize(vec2<f32>(0.0001) + ab);
-        let rel = px - U.u_mouse;
+        let rel = px - p;
         let cosb = dot(rel / max(length(rel), 0.0001), back);
         // 450 px/s => full strength; scaled by the intensity param.
-        // Floor at 35% while there is REAL movement (>5 px/s): slow
-        // drifts must stay clearly VISIBLE, not just present. A purely
-        // speed-proportional push (and even a 15% floor) left slow
-        // strokes with 4x less slope than a fast one — perceptually
-        // nothing, "only the first wave shows". A truly still cursor
-        // (speed ~0) injects nothing.
+        // Floor at 35% while there is REAL movement: slow drifts must
+        // stay clearly VISIBLE, not just present. The gate is on the
+        // ENGINE-SMOOTHED speed (an EMA over ~1/8 s) and the threshold
+        // is 1 px/s: raw per-frame speed dips at every inflection of a
+        // drawn curve (the wrist slows to turn), which cut the carve
+        // OFF mid-stroke — periodic gaps exactly where the user drew
+        // curves. A truly still cursor (EMA -> 0) injects nothing.
         let push = select(
             0.0,
             clamp(U.mouse_speed / 450.0, 0.35, 1.0),
-            U.mouse_speed > 5.0,
+            U.mouse_speed > 1.0,
         );
         // CARVE, DON'T PILE. Additive kicks (height OR velocity) under
         // a sustained same-sign push converge to a flat plateau pinned

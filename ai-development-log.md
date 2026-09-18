@@ -1059,3 +1059,19 @@ spreading", and a request for a static solid background while testing.
   every previous attempt). Dose = dig rate, per distance crossed.
 - Demo runs with ambient=0 over the black texture: solid static
   background, wake is the only motion, per the user's testing request.
+
+## 2026-09-18 — Seam-free fast strokes: vortex anchored to the path, EMA speed
+
+User: waves now radiate repeatedly (fix confirmed) but the wake showed
+periodic interruptions at medium speed, and curves cut the effect off
+entirely.
+
+- The comet's directional weight was anchored at the CURSOR, so along
+  a fast stroke's long segment the weight jumped discontinuously —
+  periodic seams. Re-anchored at the segment projection p: the weight
+  now varies smoothly along the path.
+- The carve gate consumed RAW per-frame speed, which dips to zero at
+  every curve inflection (the wrist slows to turn): the wake was
+  dash-cut on curves. The engine now feeds a one-pole EMA of speed
+  (~1/8 s, delta-scaled) and the shader gates at >1 px/s. A resting
+  cursor still decays the EMA to 0 and ends the stroke.

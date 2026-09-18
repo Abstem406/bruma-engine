@@ -963,6 +963,11 @@ pub struct AnimatedRenderer {
     last_size: (u32, u32),
     /// Previous pointer position (buffer px) for the speed term.
     last_mouse: [f32; 2],
+    /// One-pole-smoothed cursor speed (px/s): the gesture speed the
+    /// shader's carve gate should see, not the per-frame noise (raw
+    /// speed dips at every inflection of a drawn curve and spikes on
+    /// frame hiccups — both cut the wake mid-stroke).
+    speed_ema: f32,
     /// Wake telemetry state: is a stroke in progress, and its peak
     /// speed so far. One log line per stroke (start/end), never per
     /// frame.
@@ -1047,10 +1052,16 @@ impl AnimatedRenderer {
     /// Cursor speed in buffer px/s for this frame, with per-output
     /// continuity: a mouse state (x >= 0) that followed an unknown one
     /// ((-1, -1)) starts a fresh trail instead of one huge jump across
-    /// the gap (output switch, cursor left the background).
+    /// the gap (output switch, cursor left the background). The value
+    /// is one-pole SMOOTHED with a ~1/8 s time constant (alpha scaled
+    /// by the real frame delta): raw per-frame speed dips to zero at
+    /// every inflection of a drawn curve (the wrist slows to turn) and
+    /// spikes on stalls — the shader gates the carve on this value, so
+    /// the noise used to cut the wake into dashes. Resting decays the
+    /// EMA to 0 and ends the stroke naturally.
     fn mouse_speed(&mut self, state: &FrameState) -> f32 {
         let now = [state.mouse_x, state.mouse_y];
-        let speed = if state.mouse_x >= 0.0 && self.last_mouse[0] >= 0.0 && state.delta > 0.0 {
+        let raw = if state.mouse_x >= 0.0 && self.last_mouse[0] >= 0.0 && state.delta > 0.0 {
             let dx = now[0] - self.last_mouse[0];
             let dy = now[1] - self.last_mouse[1];
             (dx * dx + dy * dy).sqrt() / state.delta
@@ -1060,7 +1071,10 @@ impl AnimatedRenderer {
         self.last_mouse = now;
         // Sanity clamp: a teleport-scale spike (output switch measured
         // across the gap, a stalled frame) is not a wake.
-        speed.min(20_000.0)
+        let raw = raw.min(20_000.0);
+        let alpha = 1.0 - (-8.0 * state.delta).exp();
+        self.speed_ema += (raw - self.speed_ema) * alpha;
+        self.speed_ema
     }
 
     /// Wake telemetry: one INFO line when a stroke begins (cursor speed
@@ -1079,7 +1093,7 @@ impl AnimatedRenderer {
                 log::info!(
                     "wake START: cursor {:.0} px/s → injecting {:.0}% (intensity {:.2}, damping {:.2}, ambient {:.2})",
                     speed,
-                    if speed > 5.0 {
+                    if speed > 1.0 {
                         (speed / 450.0).clamp(0.35, 1.0) * 100.0
                     } else {
                         0.0
@@ -1284,6 +1298,7 @@ impl AnimatedRenderer {
             pipeline,
             last_size: (0, 0),
             last_mouse: [-1.0, -1.0],
+            speed_ema: 0.0,
             wake_active: false,
             wake_peak: 0.0,
             logged_params: [-1.0; 4],
