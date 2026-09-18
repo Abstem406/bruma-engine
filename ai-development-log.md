@@ -951,3 +951,11 @@ Implementation, both in the water-cursor template only:
    never a still photo between strokes; ambient drops stay on top.
 52 tests green (naga caught a max(f32, vec2) typo — fixed). Demo v20
 running with the directional wake installed.
+
+## 2026-09-18 — V wake anchored at the cursor
+User feedback: the directional weighting was not anchored at the cursor.
+Re-anchored: weight 1 + 0.65*(2cos^3 b - 1) around the cursor, b = angle
+from the backward axis — apex (exactly behind the cursor) at 1.65x,
+0.80x at the 45-degree arms, 0.35x straight ahead. The angular mean
+stays exactly 1 (cos^3 averages to zero), so the mass balance and the
+forever-alive pond survive. 52 tests green; demo v21 running.

@@ -139,15 +139,19 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         let d = distance(in.uv * U.u_res, p);
         let q = d * d / 2000.0;
         let hat = (q - 1.0) * exp(-q);
-        // Directional weighting — the wake opens BEHIND the motion:
-        // texels behind the cursor's path get ~2x the hat, texels ahead
-        // almost nothing (cosine weight over the full circle keeps the
-        // angular mean at 1, so mass balance survives the anisotropy).
-        // The trail reads as a V pointing opposite to the travel.
+        // Directional weighting — the V is ANCHORED AT THE CURSOR and
+        // opens behind the motion. Weight 1 + a*(2*cos^3 b - 1), with b
+        // the angle from the backward axis:
+        //   exactly behind the cursor (b = 0) -> 1 + a   (the apex)
+        //   decaying through the arms        -> the V wedge
+        //   straight ahead (b = 180)         -> 1 - a   (calm water)
+        // The angular mean of the weight is exactly 1 (cosine terms
+        // average to zero over the circle), so the pond's mass balance
+        // survives the anisotropy.
         let back = -normalize(vec2<f32>(0.0001) + U.u_mouse - U.u_mouse_prev);
         let rel = in.uv * U.u_res - U.u_mouse;
-        let behind = dot(rel / max(length(rel), 0.0001), back);
-        let hat_d = hat * (1.0 + 0.9 * behind);
+        let cosb = dot(rel / max(length(rel), 0.0001), back);
+        let hat_d = hat * (1.0 + 0.65 * (2.0 * cosb * cosb * cosb - 1.0));
         // 800 px/s => full strength; scaled by the intensity param.
         let push = min(U.mouse_speed / 800.0, 1.0);
         h += hat_d * 0.24 * push * (0.3 + 0.7 * U.u_params.x);
