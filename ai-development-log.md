@@ -1155,3 +1155,17 @@ EVERYWHERE while the cursor moved, killing passing crests at 50%/frame.
 - The relaxer is masked by the cap's interior (act = max(-hat, 0)):
   outside the footprint the wave equation owns the field.
 Mid-drag 25%, no pinning, total energy up (E1 54.4).
+
+## 2026-09-18 — Old-dent crossings broke the tube after seconds; fixed
+
+User: "starts fine, then after a few moments it goes back". The slow
+refill branch (0.04) fired whenever a fresh stroke crossed an OLD dent
+still lingering from previous strokes (heal ~8 s): where the old dent
+sat deeper than the fresh furrow, refill = weak patches punched into
+the new tube at every crossing — knots returning after seconds. Also
+the stamp chain capped at 12 stamps (>144 px/frame left gaps).
+
+- Dig rate is now uniform 0.5 inside the cap: re-digging an old dent
+  is a DIG (full rate, radiates through the crossing); the lingering
+  dent closes via the global heal, which still feeds the release.
+- Stamp cap raised to 64 (768 px/frame cover).

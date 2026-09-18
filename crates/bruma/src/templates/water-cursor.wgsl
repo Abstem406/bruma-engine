@@ -162,7 +162,7 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         // "launches another animation point that doesn't connect").
         // Stamps have no ends; overlapping caps weld into one
         // continuous tube.
-        let k = u32(min(ceil(seg / 12.0), 12.0));
+        let k = u32(min(ceil(seg / 12.0), 64.0));
         var best = 1e9;
         var bc = U.u_mouse_prev;
         for (var i = 0u; i < k; i = i + 1u) {
@@ -219,18 +219,19 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
         // release rings of earlier builds — mid-drag energy was present
         // but under perception). The intensity param still scales it.
         let furrow = hat * w_vortex * (0.35 + 0.30 * push) * (0.3 + 0.7 * U.u_params.x);
-        // ASYMMETRIC and LOCALLY MASKED. Inside the cap (q < 1, the
-        // tube's interior): dig fast (0.5 — tracks the finger),
-        // refill slow (0.04 — the dent lingers ~1 s and its rebound
-        // is the big release ring). OUTSIDE the cap the relaxer is
-        // OFF (act -> 0): the wave equation owns the field there, so
-        // shed rings and in-flight waves evolve untouched — the
-        // unmasked version dug toward ~0 EVERYWHERE while the cursor
-        // moved and killed every passing crest at 50%/frame ("waves
-        // only when I stop" + knots along the trail).
+        // Uniform dig rate (0.5) inside the cap. The asymmetric
+        // slow-refill (0.04) looked right on a fresh pond but broke
+        // down after seconds: old dents linger ~8 s (global heal), a
+        // new stroke CROSSES them, and where the old dent sat deeper
+        // than the fresh furrow the refill branch fired at 0.04 —
+        // weak patches punched into the new tube at every crossing
+        // ("starts fine, then the knots come back"). Re-digging an
+        // old dent is a DIG, not a refill: full rate keeps the tube
+        // uniform and radiates through the crossing. The lingering
+        // dent closes via the global heal (8 s), which is what feeds
+        // the release bloom.
         let act = max(-hat, 0.0);
-        let r = select(0.04, 0.5, furrow < h) * act;
-        let dh = (furrow - h) * r;
+        let dh = (furrow - h) * 0.5 * act;
         h += dh;
         v += dh * 2.0;
         // MOMENTUM = the carve's own delta (gain 2). dh is nonzero
