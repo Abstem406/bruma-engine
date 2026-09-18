@@ -38,6 +38,12 @@ struct Uniforms {
     // offset 48) leaves exactly this gap free at 40.
     mouse_speed: f32,
     u_clock: vec3<f32>,
+    // vec2 needs 8-byte alignment: the clock ends at 60, so this pad
+    // holds u_mouse_prev at 64 (the engine writes it there).
+    _pad60: f32,
+    // Previous frame's cursor position: the wake is injected along the
+    // moved segment (prev -> mouse), one continuous stroke.
+    u_mouse_prev: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -120,29 +126,29 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     // at the clamp and the wake would die. The hat keeps the level
     // forever stable.
     if (U.u_mouse.x >= 0.0) {
-        let m = U.u_mouse * e;
-        let d = distance(in.uv * U.u_res, m * U.u_res);
-        // The drop WIDENS with the distance traveled this frame
-        // (~speed/30 s): a fast cursor covers 50-100 px per frame and
-        // a fixed-width Gaussian would leave gaps — the wake must
-        // cover the whole segment to follow the cursor.
-        let travel = U.mouse_speed / 30.0;
-        let sig2 = 1800.0 + min(2.0 * travel * travel, 23000.0);
+        // The stroke covers the WHOLE segment moved this frame:
+        // distance from the texel to the segment prev->mouse (the
+        // brush-stroke trick). A point blob makes circles that repeat
+        // per position and cut the wake's continuity; a segment
+        // injection draws ONE continuous trail behind the cursor.
+        let a = min(U.u_mouse_prev, U.u_mouse);
+        let b = max(U.u_mouse_prev, U.u_mouse);
+        let ab = max(b - a, vec2<f32>(0.0001));
+        let p = clamp(in.uv * U.u_res, a, b);
+        let d = distance(in.uv * U.u_res, p);
+        let sig2 = 1400.0;
         let q = d * d / sig2;
         // (q - 1) * e^-q integrates to exactly 0 over the plane: the
-        // center's dent is paid by the ring around it.
+        // stroke's dent is paid by the water it raises around it.
         let hat = (q - 1.0) * exp(-q);
-        // 1000 px/s => full strength; scaled by the intensity param.
-        let push = min(U.mouse_speed / 1000.0, 1.0);
-        h += hat * 0.28 * push * (0.3 + 0.7 * U.u_params.x);
+        // 800 px/s => full strength; scaled by the intensity param.
+        let push = min(U.mouse_speed / 800.0, 1.0);
+        h += hat * 0.26 * push * (0.3 + 0.7 * U.u_params.x);
     }
 
-    // Ambient life: THREE tiny random drops every 0.4 s (positions
-    // hashed from the interval index — deterministic across texels,
-    // exactly one drop each, ~7.5 drops/s). A resting pond is never a
-    // dead photo: overlapping faint rings keep the surface alive
-    // forever — the initial "layer of water" look survives as long as
-    // the wallpaper runs.
+    // Ambient life: three random drops every 0.4 s (~7.5 drops/s) at
+    // VISIBLE amplitude — a resting pond must look like water being
+    // stirred by a fine drizzle, never like a still photo.
     {
         let k = floor(U.u_time / 0.4);
         for (var j: i32 = 0; j < 3; j++) {
@@ -150,8 +156,8 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
             let r1 = fract(sin(s * 127.1) * 43758.5453);
             let r2 = fract(sin(s * 269.5) * 18343.8235);
             let d = distance(in.uv * U.u_res, vec2<f32>(r1, r2) * U.u_res);
-            let q = d * d / 900.0;
-            h += (q - 1.0) * exp(-q) * 0.085;
+            let q = d * d / 1100.0;
+            h += (q - 1.0) * exp(-q) * 0.16;
         }
     }
 

@@ -921,3 +921,18 @@ bigger: sigma² 900, amplitude 0.085): overlapping young rings keep the
 layer permanently alive. WGSL gotcha for the record: `for (j in 0..3)`
 is not valid syntax — it is the C-style `for (var j: i32 = 0; ...)` in
 this naga version. 52 tests green.
+
+## 2026-09-18 — Continuous wake: misaligned `u_mouse_prev` (both sides)
+The trace still looked like disconnected circles. Debug profile (absolute
+heights per column) exposed it: a uniform -0.19 dent over the whole
+upper-left quadrant — impossible for the gaussian hat. Root cause: WGSL
+raises `vec2 u_mouse_prev` from offset 60 to 64 (8-byte alignment) while
+Rust (engine AND test helper) wrote it at 60 — the shader read (0,0) as
+"previous position" and stroked a diagonal across the screen.
+Fix: explicit `_pad60` on both structs (engine, template, test helper),
+tail pad rebalanced to 80 bytes everywhere. `wake_follows_the_cursor...`
+and the display-blit test now assert the stroke lands at the cursor and
+NOT in the mirrored half — they caught the bug and pin the contract.
+52 tests green. Note: one isolated heap-corruption abort inside wgpu
+(EncoderInFlight drop) after minutes of pointer churn — logged, not yet
+reproduced; watch if it recurs.

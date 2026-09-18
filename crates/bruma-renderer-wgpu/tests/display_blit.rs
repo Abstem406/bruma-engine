@@ -151,7 +151,7 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
 
     let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("test-uniforms"),
-        size: 64,
+        size: 80,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -229,7 +229,9 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
     );
 
     // ============ 2) the pointer drop injects energy WHERE THE CURSOR IS
-    // (not mirrored): cursor at (W/4, 3H/4) vs unknown.
+    // (not mirrored): cursor at (W/4, 3H/4) vs unknown. write_uniforms
+    // lays the stroke segment to the LEFT of the endpoint; measured at
+    // the endpoint's column, the mirror row stays clean either way.
     write_uniforms(&queue, &uniform_buf, [W as f32 / 4.0, 3.0 * H as f32 / 4.0]);
     let g = bind_group0(
         &device,
@@ -260,13 +262,30 @@ fn display_blit_runs_the_creator_display_and_the_drop_injects() {
     };
     let drop_here = h_at(&dropped, W / 4, 3 * H / 4) - h_at(&calm, W / 4, 3 * H / 4);
     let drop_mirror = h_at(&dropped, W / 4, H / 4) - h_at(&calm, W / 4, H / 4);
+    if std::env::var_os("BRUMA_DEBUG_PROFILE").is_some() {
+        eprintln!("-- ABSOLUTE heights (ULPs from calm): dropped vs calm");
+        for (x, y) in [
+            (64u32, 80u32),
+            (128, 80),
+            (128, 176),
+            (128, 240),
+            (320, 80),
+            (128, 8),
+        ] {
+            eprintln!(
+                "  ({x:3},{y:3}) dropped={:+5} calm={:+5}",
+                h_at(&dropped, x, y) - 0x3800,
+                h_at(&calm, x, y) - 0x3800
+            );
+        }
+    }
     assert!(
         drop_here.abs() > 36,
-        "the ripple did not land under the cursor (delta {drop_here})"
+        "the stroke must dent the water at the cursor (delta {drop_here})"
     );
     assert!(
         drop_mirror.abs() <= 30,
-        "the ripple landed mirrored into the opposite half (mirror {drop_mirror}, at-cursor {drop_here})"
+        "the stroke must NOT dent the mirrored half (mirror {drop_mirror}, at-cursor {drop_here})"
     );
 }
 
@@ -318,7 +337,7 @@ fn blit_preserves_orientation() {
         });
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("orient-uniforms"),
-            size: 64,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -376,7 +395,7 @@ fn uniform_entry() -> wgpu::BindGroupLayoutEntry {
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
-            min_binding_size: wgpu::BufferSize::new(64),
+            min_binding_size: wgpu::BufferSize::new(80),
         },
         count: None,
     }
@@ -511,6 +530,25 @@ fn write_uniforms(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2]) {
 }
 
 fn write_uniforms_speed(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2], speed: f32) {
+    // The stroke spans the segment prev->mouse: put "prev" one stroke
+    // length away (scaled by speed) so the injected wake lands along
+    // the movement, not just at the endpoint.
+    let prev = if mouse[0] >= 0.0 && speed > 0.0 {
+        let len = (speed / 30.0).min(80.0);
+        [mouse[0] - len, mouse[1]]
+    } else {
+        mouse
+    };
+    write_uniforms_prev(queue, buf, mouse, prev, speed);
+}
+
+fn write_uniforms_prev(
+    queue: &wgpu::Queue,
+    buf: &wgpu::Buffer,
+    mouse: [f32; 2],
+    prev: [f32; 2],
+    speed: f32,
+) {
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct U {
@@ -522,7 +560,9 @@ fn write_uniforms_speed(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2]
         mouse_speed: f32,
         pad44: f32,
         clock: [f32; 3],
-        pad: [f32; 1],
+        pad60: f32,
+        mouse_prev: [f32; 2],
+        pad_end: [f32; 2],
     }
     let u = U {
         time: 0.0,
@@ -533,10 +573,12 @@ fn write_uniforms_speed(queue: &wgpu::Queue, buf: &wgpu::Buffer, mouse: [f32; 2]
         mouse_speed: speed,
         pad44: 0.0,
         clock: [12.0, 0.0, 0.0],
-        pad: [0.0; 1],
+        pad60: 0.0,
+        mouse_prev: prev,
+        pad_end: [0.0; 2],
     };
     queue.write_buffer(buf, 0, unsafe {
-        std::slice::from_raw_parts(&u as *const U as *const u8, 64)
+        std::slice::from_raw_parts(&u as *const U as *const u8, 80)
     });
 }
 
@@ -732,7 +774,7 @@ fn wake_follows_the_cursor_on_screen_not_its_mirror() {
 
     let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("chain-uniforms"),
-        size: 64,
+        size: 80,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });

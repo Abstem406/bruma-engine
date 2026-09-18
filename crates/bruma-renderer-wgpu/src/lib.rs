@@ -92,9 +92,17 @@ struct Uniforms {
     /// WGSL alignment: vec3 sits at offset 48 (Rust's repr(C) would put
     /// the array at 44 — this pad holds the WGSL position).
     _pad44: f32,
-    /// Real-time clock `[h, m, s]` (WGSL offset 48).
+    /// Real-time clock `[h, m, s]` (WGSL offset 48, ends at 60).
     clock: [f32; 3],
-    _pad_end: [f32; 1],
+    /// 8-byte alignment pad so `mouse_prev` sits at 64, where the WGSL
+    /// struct reads it (vec2 alignment; the mirror of `_pad60` there).
+    _pad60: f32,
+    /// Previous frame's cursor position (buffer px; (-1,-1) unknown):
+    /// stroke shaders inject along the moved segment (prev -> mouse).
+    /// WGSL offset 64.
+    mouse_prev: [f32; 2],
+    /// Tail pad to the 80-byte block (WGSL struct round-up).
+    _pad_end: [f32; 2],
 }
 
 // The block is uploaded to the GPU as raw bytes: padding-free by
@@ -104,15 +112,15 @@ const _: () = assert!(size_of::<Uniforms>() as u64 == UNIFORM_SIZE);
 impl Uniforms {
     /// Byte view of the block (for `Queue::write_buffer`).
     fn as_bytes(&self) -> &[u8] {
-        // SAFETY: `Uniforms` is a #[repr(C)] of plain f32s (64 bytes
-        // without padding, verified above) and the resulting slice is
-        // only read.
+        // SAFETY: `Uniforms` is a #[repr(C)] of plain f32s (80 bytes
+        // with the explicit WGSL pads, verified above) and the resulting
+        // slice is only read.
         unsafe { std::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
     }
 }
 
 /// Layout constant shared between platform and runtime.
-const UNIFORM_SIZE: u64 = 64;
+const UNIFORM_SIZE: u64 = 80;
 
 /// Texture slots of the fixed group-0 layout (matches the manifest's
 /// `textures` cap): slot i occupies bindings 2i+1 (texture) and 2i+2
@@ -1821,7 +1829,10 @@ impl FrameRenderer for AnimatedRenderer {
             }
         }
 
-        // Uploads the frame's uniforms (32 bytes).
+        // Uploads the frame's uniforms. NOTE the order: mouse_speed()
+        // updates last_mouse, so the previous position must be captured
+        // BEFORE calling it.
+        let mouse_prev = self.last_mouse;
         let uniforms = Uniforms {
             time: state.time,
             // Phase 3: `param0` defaulting to 0. The UI generated from
@@ -1833,7 +1844,9 @@ impl FrameRenderer for AnimatedRenderer {
             mouse_speed: self.mouse_speed(state),
             _pad44: 0.0,
             clock: state.clock,
-            _pad_end: [0.0; 1],
+            _pad60: 0.0,
+            mouse_prev,
+            _pad_end: [0.0; 2],
         };
         self.ctx
             .queue()
