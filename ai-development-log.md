@@ -1313,3 +1313,21 @@ variant name "Cover" serialized where the schema wants "cover", and
 renames). Layers note: v1 composes photo+effect via the engine's own
 texture-slot model; a true multi-layer stack is future work once
 there's a second real consumer.
+
+## 2026-09-18 — gallery/studio: server never accepted connections
+
+Two independent defects made `bruma gallery` (and studio) appear dead in a
+real browser while curl tests passed:
+
+1. `gallery_command` blocked on `xdg-open ... .wait()` BEFORE entering the
+   accept loop. `xdg-open` may not return promptly (here: ~forever), so no
+   connection was ever accepted — page spinner, port queued, server idle.
+   Fix: fire-and-forget spawn, never wait.
+2. Single-threaded accept loop with blocking reads: browsers pre-connect
+   idle sockets; one idle socket parked the only thread and hung every
+   later request. Fix: thread-per-connection + 5s read timeout (gallery
+   reads one request; studio parses head+body).
+
+Verified live: request served while an idle socket is held open; parallel
+requests served; gallery lists 8 wallpapers; studio page + API respond;
+daemon re-attached with demo-ripple on both outputs.

@@ -303,12 +303,17 @@ fn handle(stream: &mut TcpStream, method: &str, path: &str) {
 }
 
 fn serve_loop(listener: TcpListener) {
-    for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
-        let Some((method, path, _len)) = request_head(&mut stream) else {
-            continue;
-        };
-        handle(&mut stream, &method, &path);
+    // A thread per connection: browsers keep idle pre-connect sockets
+    // open, and a blocking read on the single accept loop would hang
+    // every later request (page never finishes loading).
+    for stream in listener.incoming().flatten() {
+        std::thread::spawn(move || {
+                let mut stream = stream;
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                if let Some((method, path, _len)) = request_head(&mut stream) {
+                    handle(&mut stream, &method, &path);
+                }
+            });
     }
 }
 
@@ -342,16 +347,17 @@ pub fn gallery_command(args: &[String]) {
     let url = format!("http://127.0.0.1:{port}/");
     println!("[gallery] serving the collection at {url}");
     println!("[gallery] drag .wallpaper files into the page to install them");
-    // Best-effort browser open (x-open or xdg-open on Linux desktops).
+    // Fire-and-forget browser open (xdg-open on Linux desktops): the
+    // opener can block indefinitely, and the server must never wait on
+    // it before accepting connections.
     for opener in ["xdg-open", "gio"] {
-        let opened = std::process::Command::new(opener)
+        let spawned = std::process::Command::new(opener)
             .arg(&url)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map(|mut c| c.wait().map(|s| s.success()).unwrap_or(false))
-            .unwrap_or(false);
-        if opened {
+            .is_ok();
+        if spawned {
             break;
         }
     }

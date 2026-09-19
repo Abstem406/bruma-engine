@@ -783,12 +783,15 @@ fn read_request(stream: &mut TcpStream) -> Option<(String, String, String, Vec<u
 }
 
 fn serve_loop(listener: TcpListener) {
-    for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
-        let Some((method, path, query, body)) = read_request(&mut stream) else {
-            continue;
-        };
-        handle(&mut stream, &method, &path, &query, &body);
+    // Thread per connection + read timeout: idle browser pre-connect
+    // sockets must not block the accept loop (page never loads).
+    for mut stream in listener.incoming().flatten() {
+        std::thread::spawn(move || {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                if let Some((method, path, query, body)) = read_request(&mut stream) {
+                    handle(&mut stream, &method, &path, &query, &body);
+                }
+            });
     }
 }
 
@@ -822,15 +825,16 @@ pub fn studio_command(args: &[String]) {
     let url = format!("http://127.0.0.1:{port}/");
     println!("[studio] serving the creator at {url}");
     println!("[studio] the running wallpaper is the live preview (edit → hot-reload)");
+    // Fire-and-forget browser open: the opener can block indefinitely,
+    // and the server must never wait on it before accepting connections.
     for opener in ["xdg-open", "gio"] {
-        let opened = std::process::Command::new(opener)
+        let spawned = std::process::Command::new(opener)
             .arg(&url)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map(|mut c| c.wait().map(|s| s.success()).unwrap_or(false))
-            .unwrap_or(false);
-        if opened {
+            .is_ok();
+        if spawned {
             break;
         }
     }
