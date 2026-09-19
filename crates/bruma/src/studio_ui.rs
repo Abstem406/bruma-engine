@@ -339,7 +339,15 @@ $('goCompose').onclick = async () => {
   if (!photoBytes) { $('dlgerr').textContent = 'choose a photo first'; return; }
   $('dlgerr').textContent = 'composing…';
   try {
-    const b64 = btoa(String.fromCharCode(...photoBytes));
+    // Chunked conversion: spreading N bytes as function arguments
+    // throws RangeError "too many function arguments" on real photos.
+    // The chunk must be a multiple of 3 or each btoa() call pads with
+    // '=' mid-stream and the server-side decoder rejects the result.
+    let b64 = '';
+    const CH = 32766;
+    for (let i = 0; i < photoBytes.length; i += CH) {
+      b64 += btoa(String.fromCharCode(...photoBytes.subarray(i, i + CH)));
+    }
     const j = await api('/api/compose', { method: 'POST', headers: {'content-type':'application/json'},
       body: JSON.stringify({ name: current, effect: pickedEffect, fit: pickedFit, photo_b64: b64 }) });
     $('dlg').classList.remove('show');

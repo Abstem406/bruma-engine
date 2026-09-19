@@ -1354,3 +1354,25 @@ process — current binary composes all 7 effects fine, verified live) and
 
 After: `bruma run` (config mode) on demo-fog, GPU on both outputs, params
 [0.50, 0.60] effective. Test packages cleaned.
+
+## 2026-09-18 — compose: "too many function arguments" was the UI, not the engine
+
+The compose dialog encoded the photo with
+`btoa(String.fromCharCode(...photoBytes))`: spreading millions of bytes
+as function arguments throws RangeError in the JS engine (Firefox's
+message is literally "too many function arguments"). Curl tests never
+hit it; every real photo did. Fix: chunked base64 (32766-byte chunks —
+a multiple of 3, or each btoa() pads mid-stream and the server-side
+decoder rejects).
+
+Second defect found while verifying in a real browser: both servers
+answered `Connection: close` but browsers reuse sockets, so the next
+request on a just-closed connection died with "Failed to fetch" (curl
+never reuses, hence never saw it). Both gallery and studio now do proper
+HTTP/1.1 keep-alive: per-connection loop, pipelined bytes preserved in
+a leftover buffer, Keep-Alive advertised. Body caps raised to 32 MiB
+(compose photos ride in the JSON body; the old gallery didn't even read
+large bodies).
+
+E2E in-browser: 8.3 MB PNG → chunked base64 → 11 MB POST → composed in
+284 ms; back-to-back requests reuse the connection.

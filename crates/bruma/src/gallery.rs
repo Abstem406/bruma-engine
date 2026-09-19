@@ -96,30 +96,33 @@ fn api_list() -> String {
     format!(r#"{{"wallpapers":[{}]}}"#, items.join(","))
 }
 
-/// Parses a request's head; returns (method, path). Small POST bodies
-/// (a .wallpaper upload) usually arrive with the head — those bytes are
-/// stashed in BODY_STASH for the handler; larger ones are read there.
-fn request_head(stream: &mut TcpStream) -> Option<(String, String, usize)> {
-    let mut buf = [0u8; 8192];
-    let mut used = 0;
+/// Reads one HTTP request. HTTP/1.1 keep-alive: browsers reuse the
+/// connection, so bytes past this request's Content-Length (a pipelined
+/// next request) survive in `leftover` for the following call.
+fn read_request(
+    stream: &mut TcpStream,
+    leftover: &mut Vec<u8>,
+) -> Option<(String, String, Vec<u8>)> {
+    let mut buf = std::mem::take(leftover);
     let head_end;
     loop {
-        let n = stream.read(&mut buf[used..]).ok()?;
-        if n == 0 {
-            return None;
-        }
-        used += n;
-        if let Some(pos) = find(&buf[..used], b"\r\n\r\n") {
+        if let Some(pos) = find(&buf, b"\r\n\r\n") {
             head_end = pos + 4;
             break;
         }
-        if used == buf.len() {
+        if buf.len() > 64 << 10 {
+            return None; // head sanity cap
+        }
+        let mut chunk = [0u8; 8192];
+        let n = stream.read(&mut chunk).ok()?;
+        if n == 0 {
             return None;
         }
+        buf.extend_from_slice(&chunk[..n]);
     }
     let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
     let mut lines = head.lines();
-    let first = lines.next()?.to_string();
+    let first = lines.next()?;
     let mut parts = first.split_whitespace();
     let method = parts.next()?.to_string();
     let path = parts.next()?.to_string();
@@ -131,20 +134,21 @@ fn request_head(stream: &mut TcpStream) -> Option<(String, String, usize)> {
         })
         .next()
         .unwrap_or(0);
-    // Any body bytes already read must not be lost: stash them now.
-    let mut body = Vec::new();
-    if used > head_end {
-        body.extend_from_slice(&buf[head_end..used.min(head_end + content_length)]);
+    if content_length > 32 << 20 {
+        return None; // a .wallpaper upload; 32 MiB is plenty
     }
-    BODY_STASH.with(|s| *s.borrow_mut() = Some(body));
-    Some((method, path, content_length))
-}
-
-thread_local! {
-    /// Body bytes already buffered with the head (the 8 KiB head read
-    /// usually swallows the whole small request).
-    static BODY_STASH: std::cell::RefCell<Option<Vec<u8>>> =
-        const { std::cell::RefCell::new(None) };
+    let mut body = buf[head_end..].to_vec();
+    while body.len() < content_length {
+        let mut chunk = [0u8; 16384];
+        let n = stream.read(&mut chunk).ok()?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..n]);
+    }
+    *leftover = body.split_off(content_length.min(body.len()));
+    body.truncate(content_length);
+    Some((method, path, body))
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -153,7 +157,7 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 
 fn respond(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) {
     let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: keep-alive\r\nKeep-Alive: timeout=5\r\n\r\n",
         body.len()
     );
     let _ = stream.write_all(head.as_bytes());
@@ -195,7 +199,7 @@ fn api_uninstall(json_body: &[u8]) -> String {
 }
 
 /// Serves one request; `method path body`.
-fn handle(stream: &mut TcpStream, method: &str, path: &str) {
+fn handle(stream: &mut TcpStream, method: &str, path: &str, body: &[u8]) {
     if method == "GET" && path == "/" {
         respond(
             stream,
@@ -222,7 +226,7 @@ fn handle(stream: &mut TcpStream, method: &str, path: &str) {
         return;
     }
     if method == "POST" && path == "/api/install" {
-        let bytes = BODY_STASH.with(|s| s.borrow_mut().take().unwrap_or_default());
+        let bytes = body.to_vec();
         if bytes.is_empty() {
             respond_json(
                 stream,
@@ -266,7 +270,7 @@ fn handle(stream: &mut TcpStream, method: &str, path: &str) {
         return;
     }
     if method == "POST" && path == "/api/activate" {
-        let bytes = BODY_STASH.with(|s| s.borrow_mut().take().unwrap_or_default());
+        let bytes = body.to_vec();
         let name = serde_json::from_slice::<serde_json::Value>(&bytes)
             .ok()
             .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_owned));
@@ -289,7 +293,7 @@ fn handle(stream: &mut TcpStream, method: &str, path: &str) {
         return;
     }
     if method == "POST" && path == "/api/uninstall" {
-        let bytes = BODY_STASH.with(|s| s.borrow_mut().take().unwrap_or_default());
+        let bytes = body.to_vec();
         let resp = api_uninstall(&bytes);
         let status = if resp.contains("\"ok\"") {
             "200 OK"
@@ -306,14 +310,14 @@ fn serve_loop(listener: TcpListener) {
     // A thread per connection: browsers keep idle pre-connect sockets
     // open, and a blocking read on the single accept loop would hang
     // every later request (page never finishes loading).
-    for stream in listener.incoming().flatten() {
+    for mut stream in listener.incoming().flatten() {
         std::thread::spawn(move || {
-                let mut stream = stream;
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-                if let Some((method, path, _len)) = request_head(&mut stream) {
-                    handle(&mut stream, &method, &path);
-                }
-            });
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut leftover = Vec::new();
+            while let Some((method, path, body)) = read_request(&mut stream, &mut leftover) {
+                handle(&mut stream, &method, &path, &body);
+            }
+        });
     }
 }
 

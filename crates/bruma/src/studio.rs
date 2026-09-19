@@ -717,7 +717,7 @@ fn url_decode(s: &str) -> String {
 
 fn respond(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) {
     let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: keep-alive\r\nKeep-Alive: timeout=5\r\n\r\n",
         body.len()
     );
     let _ = stream.write_all(head.as_bytes());
@@ -728,29 +728,33 @@ fn respond_json(stream: &mut TcpStream, status: &str, json: String) {
     respond(stream, status, "application/json", json.as_bytes());
 }
 
-/// Reads head + full body (shader PUTs can exceed the 8 KiB a small
-/// request occupies; the loop reads to Content-Length).
-fn read_request(stream: &mut TcpStream) -> Option<(String, String, String, Vec<u8>)> {
-    let mut buf = Vec::with_capacity(8192);
+/// Reads head + full body of one request. HTTP/1.1 keep-alive: browsers
+/// reuse the connection, so bytes past this request's Content-Length (a
+/// pipelined next request) survive in `leftover` for the following call.
+fn read_request(
+    stream: &mut TcpStream,
+    leftover: &mut Vec<u8>,
+) -> Option<(String, String, String, Vec<u8>)> {
+    let mut buf = std::mem::take(leftover);
     let head_end;
     loop {
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            head_end = pos + 4;
+            break;
+        }
+        if buf.len() > 64 << 10 {
+            return None; // head sanity cap
+        }
         let mut chunk = [0u8; 4096];
         let n = stream.read(&mut chunk).ok()?;
         if n == 0 {
             return None;
         }
         buf.extend_from_slice(&chunk[..n]);
-        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            head_end = pos + 4;
-            break;
-        }
-        if buf.len() > 1 << 20 {
-            return None; // head sanity cap
-        }
     }
     let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
     let mut lines = head.lines();
-    let first = lines.next()?.to_string();
+    let first = lines.next()?;
     let mut parts = first.split_whitespace();
     let method = parts.next()?.to_string();
     let target = parts.next()?.to_string();
@@ -762,8 +766,8 @@ fn read_request(stream: &mut TcpStream) -> Option<(String, String, String, Vec<u
         })
         .next()
         .unwrap_or(0);
-    if content_length > 8 << 20 {
-        return None; // a shader is text; 8 MiB is plenty
+    if content_length > 32 << 20 {
+        return None; // a photo (base64) rides in the JSON body
     }
     let mut body = buf[head_end..].to_vec();
     while body.len() < content_length {
@@ -774,11 +778,12 @@ fn read_request(stream: &mut TcpStream) -> Option<(String, String, String, Vec<u
         }
         body.extend_from_slice(&chunk[..n]);
     }
-    body.truncate(content_length);
     let (path, query) = match target.split_once('?') {
         Some((p, q)) => (p.to_owned(), q.to_owned()),
         None => (target, String::new()),
     };
+    *leftover = body.split_off(content_length.min(body.len()));
+    body.truncate(content_length);
     Some((method, path, query, body))
 }
 
@@ -787,11 +792,12 @@ fn serve_loop(listener: TcpListener) {
     // sockets must not block the accept loop (page never loads).
     for mut stream in listener.incoming().flatten() {
         std::thread::spawn(move || {
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-                if let Some((method, path, query, body)) = read_request(&mut stream) {
-                    handle(&mut stream, &method, &path, &query, &body);
-                }
-            });
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut leftover = Vec::new();
+            while let Some((method, path, query, body)) = read_request(&mut stream, &mut leftover) {
+                handle(&mut stream, &method, &path, &query, &body);
+            }
+        });
     }
 }
 
