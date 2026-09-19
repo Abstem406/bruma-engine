@@ -98,8 +98,9 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     let density = U.u_params.y;
 
     // Sky gradient tinted by the real clock: cold night, warm dusk,
-    // clear noon.
-    let night = vec3<f32>(0.05, 0.07, 0.12);
+    // clear noon. Night stays readable (moonlit, not black) — the
+    // wallpaper runs mostly in evenings.
+    let night = vec3<f32>(0.10, 0.14, 0.24);
     let dusk  = vec3<f32>(0.35, 0.22, 0.28);
     let noon  = vec3<f32>(0.55, 0.68, 0.82);
     var sky = mix(night, dusk, smoothstep(0.0, 0.35, day));
@@ -109,8 +110,8 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     let r1 = 0.42 + 0.08 * fbm(vec2<f32>(uv.x * 3.1, 1.7));
     let r2 = 0.30 + 0.06 * fbm(vec2<f32>(uv.x * 4.7, 9.2));
     var col = sky;
-    col = mix(col, vec3<f32>(0.08, 0.09, 0.13), smoothstep(r1 + 0.002, r1 - 0.002, uv.y) * 0.9);
-    col = mix(col, vec3<f32>(0.04, 0.05, 0.08), smoothstep(r2 + 0.002, r2 - 0.002, uv.y));
+    col = mix(col, vec3<f32>(0.13, 0.15, 0.21), smoothstep(r1 + 0.002, r1 - 0.002, uv.y) * 0.9);
+    col = mix(col, vec3<f32>(0.07, 0.09, 0.13), smoothstep(r2 + 0.002, r2 - 0.002, uv.y));
 
     // Two drifting fog layers (far one slower: depth by speed).
     let t = U.u_time * speed;

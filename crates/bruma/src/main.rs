@@ -833,11 +833,14 @@ fn run_command(args: &[String]) {
     let notify_state_f = notify_state.clone();
     window.set_renderer_factory(Box::new(move |handles| {
         let m = model_f.borrow();
+        // A per-output section WITHOUT content is no pin at all: it falls
+        // through to the default (an empty section must not shadow it).
         let source = handles
             .output_name
             .as_deref()
             .and_then(|n| m.per_output.iter().find(|(name, _)| name == n))
             .map(|(_, f)| f)
+            .filter(|f| !matches!(f, Source::None))
             .unwrap_or(&m.default);
         let display = handles.display_ptr;
         let surface = handles.surface_ptr;

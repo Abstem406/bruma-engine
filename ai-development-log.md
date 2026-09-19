@@ -1331,3 +1331,26 @@ real browser while curl tests passed:
 Verified live: request served while an idle socket is held open; parallel
 requests served; gallery lists 8 wallpapers; studio page + API respond;
 daemon re-attached with demo-ripple on both outputs.
+
+## 2026-09-18 — activate now applies to the whole desktop
+
+User report: "compose says too many function arguments" (stale studio
+process — current binary composes all 7 effects fine, verified live) and
+"demo-fog shows black" (two compounding causes):
+
+1. Stale per-output config sections shadowed the default: eDP-1 was
+   pinned to an old demo, HDMI-A-1 to a near-black solid color. The
+   studio's activate wrote only the default section, so nothing visible
+   changed. Fix (two sides):
+   - apply_as_default releases ALL per-output pins on activation
+     (activation is a whole-desktop statement) and removes empty
+     sections, printing what it released.
+   - The renderer factory treats a present-but-empty output section as
+     "no pin" and falls through to the default (it used to render
+     Source::None → color fallback, "no source for this output").
+2. The fog template's night palette was near-black (sky 0.05,0.07,0.12).
+   Night is now moonlit (0.10,0.14,0.24) and ridges lifted — readable at
+   the hours wallpapers actually run. demo-fog re-synced to the template.
+
+After: `bruma run` (config mode) on demo-fog, GPU on both outputs, params
+[0.50, 0.60] effective. Test packages cleaned.

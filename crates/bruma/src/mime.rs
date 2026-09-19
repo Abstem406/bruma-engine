@@ -217,6 +217,15 @@ pub fn apply_as_default(name: &str) {
             return;
         }
     };
+    // Activation is a whole-desktop statement: per-output pins from the
+    // previous setup would silently keep outputs on stale content (the
+    // user sees "activate did nothing"), so release them all. Empty
+    // sections are removed too: a present-but-empty section would still
+    // shadow the default at output resolution.
+    let released: Vec<String> = cfg.outputs.keys().cloned().collect();
+    for name in &released {
+        cfg.outputs.remove(name);
+    }
     match &mut cfg.default {
         Some(d) => {
             d.package = Some(name.to_owned());
@@ -249,6 +258,9 @@ pub fn apply_as_default(name: &str) {
         return;
     }
     println!("✔ '{name}' is now the default wallpaper");
+    if !released.is_empty() {
+        println!("  released stale pins on: {}", released.join(", "));
+    }
     crate::params::wake_daemons();
 }
 
