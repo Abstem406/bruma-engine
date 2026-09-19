@@ -1376,3 +1376,29 @@ large bodies).
 
 E2E in-browser: 8.3 MB PNG → chunked base64 → 11 MB POST → composed in
 284 ms; back-to-back requests reuse the connection.
+
+## 2026-09-18 — compose is now photo + transparent effect overlay
+
+User model: picking an image and an effect means "the image is the base
+layer, the effect goes on top transparently". Only water-photo/water-
+cursor did that; the other effects painted the whole screen and ignored
+the photo. Added the photo-overlay family (photo = texture slot 0, the
+effect composites over it):
+
+- parallax-photo (aurora bands added over the photo, mouse depth)
+- fog-photo (drifting FBM mist mixed over the photo)
+- waves-photo (concentric ripples refract + highlight the photo)
+- trail-photo (glowing cursor trail, purely additive)
+
+The compose dialog now offers only this family (compose = photo +
+effect); the pure-math templates stay available via `bruma new`. All
+four compile under the naga template harness.
+
+Hardened along the way:
+- Texture/preview uploads are FULLY decoded before landing (a
+  structurally-broken image used to pass magic-byte sniffing and fail
+  only in the daemon, with the wallpaper falling back).
+- resolve_source now produces FULL param coverage (explicit override or
+  manifest default per position), so a hot package switch via SIGHUP
+  can never inherit the previous package's uniforms (observed live:
+  fog's speed/density running water-cursor's slots after a compose).

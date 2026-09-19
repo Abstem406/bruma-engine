@@ -236,8 +236,8 @@ fn api_preview_get(name: &str) -> Result<Vec<u8>, (String, &'static str)> {
 fn api_preview_put(name: &str, bytes: &[u8]) -> Result<String, (String, &'static str)> {
     let (_, dir) =
         manifest_for(name).ok_or_else(|| (format!("'{name}' is not installed"), "404"))?;
-    if image::guess_format(bytes).is_err() {
-        return Err(("preview must be a png/jpg image".into(), "400"));
+    if image::load_from_memory(bytes).is_err() {
+        return Err(("preview must be a valid png/jpg image".into(), "400"));
     }
     std::fs::write(dir.join("preview.png"), bytes)
         .map_err(|e| (format!("cannot write: {e}"), "500"))?;
@@ -282,8 +282,13 @@ fn api_texture_put(name: &str, fit: &str, bytes: &[u8]) -> Result<String, (Strin
     };
     let (mut manifest, dir) =
         manifest_for(name).ok_or_else(|| (format!("'{name}' is not installed"), "404"))?;
+    // FULL decode, not just magic-byte sniffing: a structurally broken
+    // image would pass guess_format and then fail the daemon's texture
+    // load ("could not decode") with the wallpaper falling back.
     let format = image::guess_format(bytes)
-        .map_err(|_| ("upload must be a png/jpg image".to_owned(), "400"))?;
+        .map_err(|_| ("upload must be a valid png/jpg image".to_owned(), "400"))?;
+    image::load_from_memory(bytes)
+        .map_err(|_| ("upload must be a valid png/jpg image".to_owned(), "400"))?;
     let ext = match format {
         image::ImageFormat::Jpeg => "jpg",
         _ => "png",

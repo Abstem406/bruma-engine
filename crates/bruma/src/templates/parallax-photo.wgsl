@@ -1,0 +1,129 @@
+// Parallax aurora over your photo — template.
+//
+// YOUR PHOTO is the base layer (texture slot 0); three parallax aurora
+// bands are composited on top with additive transparency. Layers deeper
+// in the scene follow the mouse less — the depth trick — and drift on
+// their own when the pointer is unknown.
+//
+// Parameters (rename freely in wallpaper.json):
+//   depth — parallax strength (default 0.5)
+//   glow  — aurora brightness (default 0.35)
+//
+// Texture bindings (from wallpaper.json `textures`, in order):
+//   @binding(1) texture_2d  — your photo (slot 0)
+//   @binding(2) sampler     — its sampler
+//
+// Uniforms (binding 0, 64 bytes): see waves.wgsl for the full table.
+
+struct Uniforms {
+    u_time: f32,
+    u_params0: f32,
+    u_mouse: vec2<f32>,
+    u_params: vec4<f32>,
+    u_res: vec2<f32>,
+    u_clock: vec3<f32>,
+}
+
+@group(0) @binding(0)
+var<uniform> U: Uniforms;
+
+@group(0) @binding(1)
+var tex0: texture_2d<f32>;
+
+@group(0) @binding(2)
+var samp0: sampler;
+
+struct VsOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VsOutput {
+    let positions = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0,  1.0),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+    );
+    let uvs = array<vec2<f32>, 4>(
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+    );
+
+    var out: VsOutput;
+    out.position = vec4<f32>(positions[idx], 0.0, 1.0);
+    // Engine orientation contract (same as image.wgsl): uv.y = 0 at the top.
+    out.uv = uvs[idx];
+    return out;
+}
+
+// Cheap value noise (hash based) — three drifting aurora bands.
+fn noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let h = vec2<f32>(127.1, 311.7);
+    let a = fract(sin(dot(i, h)) * 43758.5453);
+    let b = fract(sin(dot(i + vec2<f32>(1.0, 0.0), h)) * 43758.5453);
+    let c = fract(sin(dot(i + vec2<f32>(0.0, 1.0), h)) * 43758.5453);
+    let d = fract(sin(dot(i + vec2<f32>(1.0, 1.0), h)) * 43758.5453);
+    let s = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, s.x), mix(c, d, s.x), s.y);
+}
+
+fn fbm(p: vec2<f32>) -> f32 {
+    var v = 0.0;
+    var amp = 0.5;
+    var q = p;
+    for (var i = 0; i < 4; i++) {
+        v += amp * noise(q);
+        q = q * 2.1 + vec2<f32>(17.3, 9.1);
+        amp *= 0.5;
+    }
+    return v;
+}
+
+@fragment
+fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
+    let t = U.u_time;
+    let depth = 0.02 + 0.10 * U.u_params.x;
+
+    // The photo IS the wallpaper: aspect-correct, it fills the screen.
+    let photo = textureSample(tex0, samp0, bruma_texture_fit(in.uv, tex0, U.u_res, BRUMA_TEX0_FIT)).rgb;
+    var col = photo;
+
+    // Parallax offset per layer: nearer layers move more. When the
+    // pointer is unknown (-1,-1) the offset becomes a slow autonomous
+    // drift (the wallpaper stays alive on an untouched desktop).
+    let known = select(0.0, 1.0, U.u_mouse.x >= 0.0);
+    let aim = mix(
+        vec2<f32>(0.5 * sin(t * 0.13), 0.5 * cos(t * 0.11)),
+        U.u_mouse / max(U.u_res, vec2<f32>(1.0)),
+        known,
+    );
+    let off = aim - vec2<f32>(0.5);
+
+    // Three aurora bands at increasing depth, ADDED over the photo
+    // (transparent overlay: where there is no curtain, the photo shows).
+    let glow = 0.2 + 0.6 * U.u_params.y;
+    for (var i = 0; i < 3; i++) {
+        let fi = f32(i);
+        let par = depth * (1.0 - fi * 0.3);
+        let p = vec2<f32>(
+            in.uv.x * (2.0 + fi) + off.x * par * 8.0 + t * (0.02 + 0.03 * fi),
+            in.uv.y * (1.2 + fi * 0.6) + off.y * par * 6.0 - fi * 0.35,
+        );
+        let band = fbm(p + vec2<f32>(0.0, t * 0.05));
+        let curtain = smoothstep(0.45, 0.75, band);
+        let tint = mix(vec3<f32>(0.1, 0.9, 0.55), vec3<f32>(0.4, 0.3, 0.9), fi * 0.5);
+        col += tint * curtain * glow * (0.35 - fi * 0.09) * 0.8;
+    }
+
+    // Soft vignette keeps the focus on the center.
+    let d = length(in.uv - vec2<f32>(0.5));
+    col *= 1.0 - 0.35 * smoothstep(0.45, 0.85, d);
+
+    return vec4<f32>(col, 1.0);
+}

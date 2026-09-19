@@ -296,13 +296,15 @@ $('delBtn').onclick = async () => {
 
 /* ---- compose dialog ---- */
 const EFFECTS = [
+  // Compose = your photo as the base layer + a transparent effect pass
+  // on top. Only the photo-overlay family is offered (water-cursor and
+  // water-photo reshape the photo itself; the rest composite over it).
   ['water-cursor', 'Calm water', 'wake + rings under the cursor'],
   ['water-photo', 'Still water', 'gentle ripples over the photo'],
-  ['parallax', 'Parallax', 'depth layers, mouse-reactive'],
-  ['fog', 'Fog', 'drifting mist, day/night'],
-  ['waves', 'Waves', 'concentric rings'],
-  ['water', 'Deep water', 'procedural, no photo'],
-  ['trail', 'Light trail', 'glowing cursor path'],
+  ['parallax-photo', 'Parallax', 'aurora depth layers, mouse-reactive'],
+  ['fog-photo', 'Fog', 'drifting mist over the photo'],
+  ['waves-photo', 'Waves', 'soft concentric ripples'],
+  ['trail-photo', 'Light trail', 'glowing cursor path'],
 ];
 (function fillEffects() {
   const box = $('effects');

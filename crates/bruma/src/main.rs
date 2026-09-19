@@ -478,16 +478,30 @@ fn resolve_source(
             std::process::exit(2);
         });
         pairs.extend(cli_overrides.iter().cloned());
-        let mut overrides = Vec::new();
+        let mut explicit: Vec<(usize, f32)> = Vec::new();
         for (name, value) in pairs {
             match manifest.params.iter().position(|p| p.name == name) {
-                Some(pos) => overrides.push((pos, value.clamp(0.0, 1.0))),
+                Some(pos) => explicit.push((pos, value.clamp(0.0, 1.0))),
                 None => {
                     eprintln!("error: '{spec}' does not declare parameter '{name}'");
                     std::process::exit(2);
                 }
             }
         }
+        // FULL coverage: every manifest position gets a value (explicit
+        // override or the manifest default). Renderers then hold the
+        // complete param state, so a hot package switch (SIGHUP after a
+        // compose) can never inherit the previous package's uniforms —
+        // the runtime's own seeding happens at startup only.
+        let mut by_pos = explicit
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        let overrides: Vec<(usize, f32)> = manifest
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, by_pos.remove(&i).unwrap_or(p.default).clamp(0.0, 1.0)))
+            .collect();
         return Source::Shader {
             path: pkg_path.join(&manifest.entry).display().to_string(),
             overrides,

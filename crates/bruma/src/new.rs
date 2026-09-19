@@ -66,6 +66,34 @@ const TEMPLATES: &[Template] = &[
         assets: &[],
         params: &[("depth", "Depth", 0.5), ("glow", "Glow", 0.35)],
     },
+    // Photo-overlay family: the user's photo (texture slot 0, provided
+    // by the studio compose) is the base layer; the effect is a
+    // transparent pass on top. No bundled assets — compose supplies the
+    // photo and writes the manifest texture entry.
+    Template {
+        name: "parallax-photo",
+        source: include_str!("templates/parallax-photo.wgsl"),
+        assets: &[],
+        params: &[("depth", "Depth", 0.5), ("glow", "Glow", 0.35)],
+    },
+    Template {
+        name: "fog-photo",
+        source: include_str!("templates/fog-photo.wgsl"),
+        assets: &[],
+        params: &[("speed", "Speed", 0.5), ("density", "Density", 0.6)],
+    },
+    Template {
+        name: "waves-photo",
+        source: include_str!("templates/waves-photo.wgsl"),
+        assets: &[],
+        params: &[("waves", "Waves", 0.5), ("speed", "Speed", 0.5)],
+    },
+    Template {
+        name: "trail-photo",
+        source: include_str!("templates/trail-photo.wgsl"),
+        assets: &[],
+        params: &[("glow", "Glow", 0.5), ("fade", "Fade", 0.5)],
+    },
 ];
 
 /// One scaffolding template: shader source, extra asset files and the
@@ -108,7 +136,7 @@ pub fn manifest_json(title: &str, template: &str) -> Option<String> {
     // water-cursor is a simulation over the pointer's wake.
     let permissions = match template {
         "trail" => "\"params\", \"feedback\"",
-        "parallax" => "\"params\", \"mouse\"",
+        "parallax" | "parallax-photo" | "trail-photo" => "\"params\", \"mouse\"",
         "water-cursor" => "\"params\", \"feedback\", \"mouse\"",
         _ => "\"params\"",
     };
