@@ -1289,3 +1289,27 @@ extends this same API later.
   (the studio packs that root); validation must include the engine
   prelude (shaders call `bruma_texture_fit`); manifest structs gained
   Serialize.
+
+## 2026-09-18 — studio: visual controls for everyone, code optional
+
+The studio splits into two tabs, by design:
+- DESIGN (no code): parameter sliders generated from the manifest, a
+  photo-layer drop zone with cover/contain fit, a COMPOSE dialog (one
+  photo + one effect template — water-cursor/water-photo/parallax/fog/
+  waves/water/trail — the template brings its own params identity),
+  preview upload, activate and uninstall. Everything curl-verified
+  live: compose installed the water-cursor shader + photo.png + the
+  template's params (intensity/damping/ambient) in one call, activate
+  flipped the daemon, uninstall refused the active package.
+- CODE (optional): the WGSL editor with Ctrl-S apply and naga errors.
+
+New API: /api/preview (get/put), /api/textures (list with dimensions),
+/api/texture (serves the image file), /api/compose (base64 photo +
+effect + fit), /api/activate, /api/uninstall (active protected).
+Manifest structs now Serialize; a round-trip test pins that whatever
+the studio writes parses again with the real parser (caught live: the
+variant name "Cover" serialized where the schema wants "cover", and
+"wallpaper_type" where the schema wants "type" — both fixed with serde
+renames). Layers note: v1 composes photo+effect via the engine's own
+texture-slot model; a true multi-layer stack is future work once
+there's a second real consumer.
