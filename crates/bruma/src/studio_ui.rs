@@ -32,6 +32,14 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #
 .pgroup { margin-bottom: 16px; }
 .pgroup label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
 .pgroup .val { color: #7aa2f7; font-variant-numeric: tabular-nums; }
+#layerList { list-style: none; margin: 0; padding: 0; }
+.llayer { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border: 1px solid #26262f; border-radius: 8px; margin-bottom: 6px; cursor: pointer; }
+.llayer.on { border-color: #7aa2f7; background: #7aa2f711; }
+.llayer .lname { flex: 1; font-size: 13px; }
+.llayer .lmeta { color: #777; font-size: 11px; }
+.llayer button { background: none; border: none; color: #888; cursor: pointer; font-size: 13px; padding: 0 3px; }
+.llayer button:hover { color: #fff; }
+.lrow { display: flex; gap: 8px; align-items: center; }
 input[type=range] { width: 100%; accent-color: #7aa2f7; height: 28px; }
 .tzone { border: 2px dashed #3a3a4a; border-radius: 12px; padding: 14px; text-align: center; color: #999; cursor: pointer; transition: all .15s; }
 .tzone.over, .tzone:hover { border-color: #7aa2f7; color: #7aa2f7; background: #7aa2f711; }
@@ -85,7 +93,19 @@ input[type=range] { width: 100%; accent-color: #7aa2f7; height: 28px; }
   <div class=cols>
     <div>
       <div class=card>
-        <h2>Effect strength</h2>
+        <h2>Layer stack</h2>
+        <ul id=layerList></ul>
+        <div class=lrow style="margin-top:8px">
+          <select id=effPick style="flex:1"></select>
+          <button class=btn id=addLayer>Add layer</button>
+        </div>
+      </div>
+      <div class=card>
+        <h2>Layer settings</h2>
+        <div id=laySet><em>pick a layer above</em></div>
+      </div>
+      <div class=card>
+        <h2>Wallpaper params</h2>
         <div id=params></div>
       </div>
       <div class=card>
@@ -358,6 +378,136 @@ $('goCompose').onclick = async () => {
   } catch (e) { $('dlgerr').textContent = e.message; }
 };
 
+/* ---- layer stack (L1) ---- */
+let CATALOG = [];
+let layersDoc = { base: null, layers: [] };
+let pickedLayer = -1;
+let layersTimer = null;
+
+async function loadCatalog() {
+  if (CATALOG.length) return;
+  try {
+    const j = await api('/api/catalog');
+    CATALOG = j.effects;
+    $('effPick').innerHTML = CATALOG.map(e => `<option value="${e.id}">${e.label}</option>`).join('');
+  } catch {}
+}
+
+async function loadLayers() {
+  if (!current) return;
+  try {
+    layersDoc = await api('/api/layers?name=' + encodeURIComponent(current));
+  } catch { layersDoc = { base: null, layers: [] }; }
+  pickedLayer = -1;
+  renderLayers();
+}
+
+function renderLayers() {
+  const ul = $('layerList');
+  ul.innerHTML = '';
+  const mk = (label, meta, cls, btns, onpick) => {
+    const li = document.createElement('li'); li.className = 'llayer ' + cls;
+    const nm = document.createElement('span'); nm.className = 'lname'; nm.textContent = label;
+    const mt = document.createElement('span'); mt.className = 'lmeta'; mt.textContent = meta;
+    li.append(nm, mt);
+    for (const [txt, fn, title] of btns) {
+      const b = document.createElement('button'); b.textContent = txt; if (title) b.title = title;
+      b.onclick = ev => { ev.stopPropagation(); fn(); };
+      li.appendChild(b);
+    }
+    li.onclick = onpick;
+    ul.appendChild(li);
+    return li;
+  };
+  mk('Photo (base)', layersDoc.base ? layersDoc.base.fit : 'none',
+     'base' + (pickedLayer === -2 ? ' on' : ''),
+     [], () => { pickedLayer = -2; renderLayers(); });
+  layersDoc.layers.forEach((l, i) => {
+    mk(l.effect, `op ${l.opacity.toFixed(2)} · d ${l.depth.toFixed(2)}`,
+       pickedLayer === i ? 'on' : '',
+       [
+         ['\u2191', () => moveLayer(i, -1), 'up'],
+         ['\u2193', () => moveLayer(i, +1), 'down'],
+         ['\u00d7', () => removeLayer(i), 'remove'],
+       ],
+       () => { pickedLayer = i; renderLayers(); });
+  });
+  renderLayerSettings();
+}
+
+function renderLayerSettings() {
+  const box = $('laySet');
+  box.innerHTML = '';
+  const slider = (label, value, oninput) => {
+    const wrap = document.createElement('div'); wrap.className = 'pgroup';
+    const lab = document.createElement('label');
+    const nm = document.createElement('span'); nm.textContent = label;
+    const val = document.createElement('span'); val.className = 'val'; val.textContent = value.toFixed(2);
+    lab.append(nm, val);
+    const range = document.createElement('input'); range.type = 'range'; range.min = 0; range.max = 1; range.step = 0.01; range.value = value;
+    range.oninput = () => { val.textContent = (+range.value).toFixed(2); oninput(+range.value); };
+    wrap.append(lab, range);
+    box.appendChild(wrap);
+  };
+  if (pickedLayer === -2) {
+    if (layersDoc.base) {
+      slider('Parallax depth', layersDoc.base.depth ?? 0, v => { layersDoc.base.depth = v; scheduleLayersSave(); });
+      const fits = ['cover', 'contain'];
+      const sel = document.createElement('select');
+      sel.innerHTML = fits.map(f => `<option ${layersDoc.base.fit === f ? 'selected' : ''}>${f}</option>`).join('');
+      sel.onchange = () => { layersDoc.base.fit = sel.value; scheduleLayersSave(); };
+      box.appendChild(sel);
+    } else { box.innerHTML = '<em>no photo — compose one (button on the right)</em>'; }
+    return;
+  }
+  if (pickedLayer < 0) { box.innerHTML = '<em>pick a layer above</em>'; return; }
+  const l = layersDoc.layers[pickedLayer];
+  const eff = CATALOG.find(e => e.id === l.effect);
+  slider('Opacity', l.opacity ?? 1, v => { l.opacity = v; scheduleLayersSave(); });
+  slider('Parallax depth', l.depth ?? 0, v => { l.depth = v; scheduleLayersSave(); });
+  if (eff) for (const p of eff.params) {
+    slider(p.label, (l.params && l.params[p.name]) ?? p.default, v => {
+      l.params = l.params || {}; l.params[p.name] = v; scheduleLayersSave();
+    });
+  }
+}
+
+function scheduleLayersSave() {
+  clearTimeout(layersTimer);
+  layersTimer = setTimeout(saveLayers, 350);
+}
+async function saveLayers() {
+  if (!current) return;
+  try {
+    await api('/api/layers?name=' + encodeURIComponent(current), {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(layersDoc),
+    });
+    pop('layers applied — live');
+    loadParams();
+  } catch (e) { pop(e.message); }
+}
+
+$('addLayer').onclick = () => {
+  const id = $('effPick').value;
+  if (!id) return;
+  layersDoc.layers.push({ effect: id, opacity: 1, depth: 0, params: {} });
+  pickedLayer = layersDoc.layers.length - 1;
+  renderLayers(); scheduleLayersSave();
+};
+function removeLayer(i) {
+  layersDoc.layers.splice(i, 1);
+  pickedLayer = -1;
+  renderLayers(); scheduleLayersSave();
+}
+function moveLayer(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= layersDoc.layers.length) return;
+  [layersDoc.layers[i], layersDoc.layers[j]] = [layersDoc.layers[j], layersDoc.layers[i]];
+  pickedLayer = j;
+  renderLayers(); scheduleLayersSave();
+}
+
 /* ---- code tab (optional) ---- */
 async function loadShader() {
   const r = await fetch('/api/shader?name=' + encodeURIComponent(current));
@@ -384,7 +534,7 @@ editor.addEventListener('keydown', e => {
 save.onclick = applyShader;
 
 /* ---- boot ---- */
-function loadAll() { if (!current) return; loadParams(); loadTexture(); loadPreview(); loadShader(); }
+function loadAll() { if (!current) return; loadParams(); loadTexture(); loadPreview(); loadShader(); loadLayers(); loadCatalog(); }
 pkgSel.onchange = () => { current = pkgSel.value; loadAll(); };
 (async () => {
   await loadPackages();

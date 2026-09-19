@@ -35,10 +35,10 @@ pub struct FrameState {
     /// Cursor Y position in the drawing area (pixels; `-1.0` = unknown).
     pub mouse_y: f32,
     /// Flat values of the first declared parameters (in WGSL:
-    /// `u_params0..3`). The manifest (Phase 4) and
+    /// `u_params0..15`). The manifest and
     /// [`WallpaperRuntime::params`] carry the names; the GPU only sees
     /// numbers.
-    pub params: [f32; 4],
+    pub params: [f32; 16],
     /// Real-time clock for shaders (`u_clock`): `[hours, minutes,
     /// seconds]` of the local day, supplied by the platform on every
     /// animated frame. `[0, 0, 0]` when no provider is installed.
@@ -54,7 +54,7 @@ impl Default for FrameState {
             height: 0,
             mouse_x: -1.0,
             mouse_y: -1.0,
-            params: [0.0; 4],
+            params: [0.0; 16],
             clock: [0.0; 3],
         }
     }
@@ -189,7 +189,7 @@ impl BasicRuntime {
     /// fits in the uniform block). Used by the CLI when loading a
     /// package, whose names come from the manifest.
     pub fn set_params(&mut self, mut params: Vec<ParamValue>) {
-        params.truncate(4);
+        params.truncate(16);
         log::info!(
             "runtime params set: {}",
             params

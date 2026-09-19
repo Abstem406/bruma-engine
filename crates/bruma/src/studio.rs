@@ -352,47 +352,161 @@ fn api_compose(body: &[u8]) -> Result<String, String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(photo)
         .map_err(|_| "photo_b64 is not valid base64".to_owned())?;
-    // 1. The effect template's source becomes the package shader.
-    let source =
-        crate::new::template_source(effect).ok_or_else(|| format!("unknown effect '{effect}'"))?;
-    // Does the template actually sample a texture? (Only the photo
-    // families declare `textures`; parallax/fog/waves/trail are pure
-    // math.) Composing one of those over a photo is legal but the photo
-    // would be INVISIBLE — take it from the manifest and say so.
-    let uses_texture = source.contains("tex0");
-    api_shader_put(name, source.as_bytes()).map_err(|(e, _)| e)?;
-    // 2. The template's identity replaces the manifest's params and
-    // permissions, preserving the package title/name. The photo goes to
-    // the texture slot ONLY for the photo families.
-    let (mut manifest, dir) =
-        manifest_for(name).ok_or_else(|| format!("'{name}' is not installed"))?;
-    let fresh_json = crate::new::manifest_json(&manifest.title, effect)
-        .ok_or_else(|| format!("unknown effect '{effect}'"))?;
-    let mut fresh = bruma_package::Manifest::parse(&fresh_json)
-        .map_err(|e| format!("internal error: template manifest invalid: {e}"))?;
-    fresh.version = manifest.version.clone();
-    if uses_texture {
-        // The photo goes to the texture slot (api_texture_put writes
-        // the manifest with the texture); re-read before applying the
-        // template identity so that edit is not lost.
-        api_texture_put(name, fit, &bytes).map_err(|(e, _)| e)?;
-        let (manifest, dir) =
-            manifest_for(name).ok_or_else(|| format!("'{name}' is not installed"))?;
-        let mut manifest = manifest;
-        manifest.params = fresh.params;
-        manifest.permissions = fresh.permissions;
-        write_manifest(&dir, &manifest).map_err(|(e, _)| e)?;
-    } else {
-        manifest.params = fresh.params;
-        manifest.permissions = fresh.permissions;
-        manifest.textures.clear();
-        write_manifest(&dir, &manifest).map_err(|(e, _)| e)?;
-        println!("[studio] {effect} ignores the photo (pure-math effect) — texture removed");
+
+    // Single-layer compose in layer terms: this effect becomes the only
+    // layer of the stack (the photo, when the effect wants one, is the
+    // base). Layer stacks live in layers.json; the shader is generated.
+    let doc = crate::layers::LayersDoc {
+        base: Some(crate::layers::BasePhoto {
+            path: "assets/photo.png".into(),
+            fit: fit.to_owned(),
+        }),
+        layers: vec![crate::layers::Layer {
+            effect: effect.to_owned(),
+            ..Default::default()
+        }],
+    };
+    let json = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    api_layers_put(name, &json, Some(&bytes))
+}
+
+/// GET /api/catalog — the effect catalog for the layer editor.
+fn api_catalog() -> String {
+    let items: Vec<String> = crate::layers::catalog()
+        .iter()
+        .map(|e| {
+            let params: Vec<String> = e
+                .params
+                .iter()
+                .map(|p| {
+                    format!(
+                        r#"{{"name":"{}","label":"{}","default":{}}}"#,
+                        p.name, p.label, p.default
+                    )
+                })
+                .collect();
+            format!(
+                r#"{{"id":"{}","label":"{}","params":[{}]}}"#,
+                e.id,
+                e.label,
+                params.join(",")
+            )
+        })
+        .collect();
+    format!(r#"{{"effects":[{}]}}"#, items.join(","))
+}
+
+/// GET /api/layers?name=N — the layer stack, or an empty one.
+fn api_layers_get(name: &str) -> Result<String, (String, &'static str)> {
+    let (_, dir) =
+        manifest_for(name).ok_or_else(|| (format!("'{name}' is not installed"), "404"))?;
+    match std::fs::read_to_string(dir.join("layers.json")) {
+        Ok(json) => Ok(json),
+        Err(_) => Ok(r#"{"base":null,"layers":[]}"#.to_owned()),
     }
-    println!("[studio] {name} — composed: {effect}");
+}
+
+/// PUT /api/layers?name=N — replaces the stack: validates the doc,
+/// regenerates the shader + manifest identity (params/permissions/
+/// textures), writes everything, and the daemon hot-reloads. An
+/// optional photo upload rides along (compose with a fresh image).
+fn api_layers_put(name: &str, json: &str, photo: Option<&[u8]>) -> Result<String, String> {
+    let doc: crate::layers::LayersDoc =
+        serde_json::from_str(json).map_err(|e| format!("bad layers.json: {e}"))?;
+    let generated = crate::layers::generate(&doc)?;
+    // Validate the generated shader with the engine's own validator
+    // before anything lands.
+    if let Some(err) = naga_error(&generated.wgsl) {
+        return Err(format!("generated shader does not compile: {err}"));
+    }
+    let (mut manifest, mut dir) =
+        manifest_for(name).ok_or_else(|| format!("'{name}' is not installed"))?;
+
+    // The photo: full upload path (decode, assets/, manifest texture).
+    if let Some(bytes) = photo {
+        api_texture_put(
+            name,
+            doc.base.as_ref().map(|b| b.fit.as_str()).unwrap_or("cover"),
+            bytes,
+        )
+        .map_err(|(e, _)| e)?;
+        // api_texture_put re-wrote the manifest from disk; re-read so
+        // the identity edits below are not lost.
+        let (m, d) = manifest_for(name).ok_or_else(|| format!("'{name}' vanished"))?;
+        manifest = m;
+        dir = d;
+    }
+
+    // Identity: generated params/permissions/textures replace the old.
+    manifest.params = generated
+        .params
+        .iter()
+        .map(|(n, l, v)| bruma_package::Param {
+            name: n.clone(),
+            label: Some(l.clone()),
+            default: *v,
+        })
+        .collect();
+    let mut permissions = vec!["params".to_owned()];
+    if generated.mouse {
+        permissions.push("mouse".to_owned());
+    }
+    manifest.permissions = permissions;
+    if doc.base.is_some() {
+        if manifest.textures.is_empty() {
+            // First photo on a package that had none: same name the
+            // texture upload uses (fit from the doc).
+            let ext = std::fs::read_dir(dir.join("assets"))
+                .ok()
+                .and_then(|rd| {
+                    rd.flatten().find_map(|e| {
+                        let p = e.path();
+                        let name = p.file_name()?.to_str()?;
+                        name.starts_with("photo.").then(|| {
+                            p.extension()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string()
+                        })
+                    })
+                })
+                .unwrap_or_else(|| "png".to_owned());
+            manifest.textures.push(bruma_package::TextureSpec {
+                path: format!("assets/photo.{ext}"),
+                fit: match doc.base.as_ref().map(|b| b.fit.as_str()) {
+                    Some("contain") => bruma_package::TextureFit::Contain,
+                    _ => bruma_package::TextureFit::Cover,
+                },
+            });
+        } else {
+            // Keep the declared path/fit in sync with the doc's fit.
+            let fit = match doc.base.as_ref().map(|b| b.fit.as_str()) {
+                Some("contain") => bruma_package::TextureFit::Contain,
+                _ => bruma_package::TextureFit::Cover,
+            };
+            manifest.textures[0].fit = fit;
+        }
+    } else {
+        manifest.textures.clear();
+    }
+    write_manifest(&dir, &manifest).map_err(|(e, _)| e)?;
+    std::fs::write(dir.join("layers.json"), json)
+        .map_err(|e| format!("cannot write layers.json: {e}"))?;
+    std::fs::write(dir.join(&manifest.entry), generated.wgsl)
+        .map_err(|e| format!("cannot write shader: {e}"))?;
+    println!(
+        "[studio] {name} — layers: {} ({} params)",
+        doc.layers.len(),
+        generated.params.len()
+    );
+    // The shader hot-reloads by mtime, but the new manifest's params
+    // only re-seed on a config reload — wake the daemons.
+    crate::params::wake_daemons();
     Ok(format!(
-        r#"{{"ok":true,"name":"{}","effect":"{effect}","uses_photo":{uses_texture}}}"#,
-        json_escape(name)
+        r#"{{"ok":true,"name":"{}","layers":{},"params":{}}}"#,
+        json_escape(name),
+        doc.layers.len(),
+        generated.params.len()
     ))
 }
 
@@ -663,6 +777,37 @@ fn handle(stream: &mut TcpStream, method: &str, path: &str, query: &str, body: &
                 stream,
                 "400 Bad Request",
                 format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
+            ),
+        },
+        ("GET", "/api/catalog") => respond_json(stream, "200 OK", api_catalog()),
+        ("GET", "/api/layers") => match q("name") {
+            Some(n) => match api_layers_get(&n) {
+                Ok(j) => respond_json(stream, "200 OK", j),
+                Err((e, code)) => respond_json(
+                    stream,
+                    code,
+                    format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
+                ),
+            },
+            None => respond_json(
+                stream,
+                "400 Bad Request",
+                r#"{"error":"name required"}"#.into(),
+            ),
+        },
+        ("PUT", "/api/layers") => match q("name") {
+            Some(n) => match api_layers_put(&n, &String::from_utf8_lossy(body), None) {
+                Ok(j) => respond_json(stream, "200 OK", j),
+                Err(e) => respond_json(
+                    stream,
+                    "400 Bad Request",
+                    format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
+                ),
+            },
+            None => respond_json(
+                stream,
+                "400 Bad Request",
+                r#"{"error":"name required"}"#.into(),
             ),
         },
         _ => respond_json(stream, "404 Not Found", r#"{"error":"no route"}"#.into()),

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 mod config;
 mod gallery;
+mod layers;
 mod mime;
 mod new;
 mod params;

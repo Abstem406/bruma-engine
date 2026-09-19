@@ -56,7 +56,7 @@ pub struct Manifest {
     /// Default FPS cap (1..=120). Missing: 30.
     pub fps: Option<u32>,
     /// Named parameters: the sliders the UI will generate (Phase 6).
-    /// Maximum 4 (they map 1:1 to `u_params0..3` of the uniform block).
+    /// Maximum 16 (they map 1:1 to `u_params0..15` of the uniform block).
     pub params: Vec<Param>,
     /// Assets exposed to the shader as textures, in declaration order
     /// (binding `2i+1` / `2i+2`). Paths under `assets/`, png/jpg, max 4.
@@ -205,9 +205,9 @@ impl Manifest {
             return Err(PackError::BadParam(format!("fps={fps} out of 1..=120")));
         }
 
-        if raw.params.len() > 4 {
+        if raw.params.len() > 16 {
             return Err(PackError::BadParam(format!(
-                "the engine exposes 4 parameters (u_params0..3), the manifest declares {}",
+                "the engine exposes 16 parameters (u_params0..15), the manifest declares {}",
                 raw.params.len()
             )));
         }
@@ -468,14 +468,16 @@ mod tests {
 
     #[test]
     fn params_limits_and_duplicates() {
-        // More than 4: rejected.
+        // More than 16: rejected; 16 exactly: fine.
+        let many: Vec<String> = (0..17).map(|i| format!("{{\"name\": \"p{i}\"}}")).collect();
+        let json = base_json().replace(PARAMS_BASE, &format!(r#""params": [{}]"#, many.join(", ")));
+        assert!(Manifest::parse(&json).is_err());
+        let sixteen: Vec<String> = (0..16).map(|i| format!("{{\"name\": \"p{i}\"}}")).collect();
         let json = base_json().replace(
             PARAMS_BASE,
-            r#""params": [
-                {"name": "a"}, {"name": "b"}, {"name": "c"}, {"name": "d"}, {"name": "e"}
-            ]"#,
+            &format!(r#""params": [{}]"#, sixteen.join(", ")),
         );
-        assert!(Manifest::parse(&json).is_err());
+        assert!(Manifest::parse(&json).is_ok());
 
         // Duplicate: rejected.
         let json = base_json().replace(PARAMS_BASE, r#""params": [{"name": "x"}, {"name": "x"}]"#);

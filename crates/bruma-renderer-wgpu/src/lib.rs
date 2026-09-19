@@ -64,7 +64,8 @@ pub enum RendererError {
     ShaderCompile(String),
 }
 
-/// Uniform block of the animated shader (64 bytes, no padding).
+/// Uniform block of the animated shader (128 bytes; 0..80 is the v1
+/// layout, 80..128 carries params 4..16 as aligned vec4s).
 ///
 /// GPU layout (same as `Uniforms` in the shaders):
 /// ```text
@@ -103,6 +104,10 @@ struct Uniforms {
     mouse_prev: [f32; 2],
     /// Tail pad to the 80-byte block (WGSL struct round-up).
     _pad_end: [f32; 2],
+    /// Parameters 4..16 (WGSL `u_params4..15`), four aligned vec4s
+    /// starting at byte 80. Offsets 0..80 keep the v1 layout so existing
+    /// shaders (and their compiled BGLs) stay valid.
+    params_ext: [[f32; 4]; 3],
 }
 
 // The block is uploaded to the GPU as raw bytes: padding-free by
@@ -129,7 +134,7 @@ pub fn with_prelude(raw: &str, fits: &[TextureFit]) -> String {
 }
 
 /// Layout constant shared between platform and runtime.
-const UNIFORM_SIZE: u64 = 80;
+const UNIFORM_SIZE: u64 = 128;
 
 /// Texture slots of the fixed group-0 layout (matches the manifest's
 /// `textures` cap): slot i occupies bindings 2i+1 (texture) and 2i+2
@@ -1045,7 +1050,7 @@ pub struct AnimatedRenderer {
     /// the configure-time draw with defaults-zero; the animated frames
     /// carry the manifest values — the log must show the transition,
     /// not just the misleading first shot).
-    logged_params: [f32; 4],
+    logged_params: [f32; 16],
     /// Optional reload event callback (e.g. to turn a shader rejection
     /// into a desktop notification). Invoked on the loop's thread, never
     /// on the render path.
@@ -1154,7 +1159,7 @@ impl AnimatedRenderer {
     /// This is the creator's window into the wave: if these lines
     /// appear, the pointer path works — what you SEE is then pure
     /// shading.
-    fn log_wake(&mut self, speed: f32, params: &[f32; 4]) {
+    fn log_wake(&mut self, speed: f32, params: &[f32; 16]) {
         const START: f32 = 25.0;
         const END: f32 = 12.0;
         if !self.wake_active {
@@ -1376,7 +1381,7 @@ impl AnimatedRenderer {
             speed_ema: 0.0,
             wake_active: false,
             wake_peak: 0.0,
-            logged_params: [-1.0; 4],
+            logged_params: [-1.0; 16],
             on_reload: None,
             last_error: None,
             param_overrides: Vec::new(),
@@ -1401,7 +1406,7 @@ impl AnimatedRenderer {
     pub fn set_param_overrides(&mut self, overrides: Vec<(usize, f32)>) {
         self.param_overrides = overrides
             .into_iter()
-            .filter(|(i, _)| *i < 4)
+            .filter(|(i, _)| *i < 16)
             .map(|(i, v)| (i, v.clamp(0.0, 1.0)))
             .collect();
     }
@@ -2002,13 +2007,7 @@ impl FrameRenderer for AnimatedRenderer {
         self.log_wake(speed, &params);
         if params != self.logged_params {
             self.logged_params = params;
-            log::info!(
-                "effective params (u_params0..3): [{:.2}, {:.2}, {:.2}, {:.2}]",
-                params[0],
-                params[1],
-                params[2],
-                params[3],
-            );
+            log::info!("effective params (u_params0..15): {params:?}");
         }
         let uniforms = Uniforms {
             time: state.time,
@@ -2016,7 +2015,8 @@ impl FrameRenderer for AnimatedRenderer {
             // the .wallpaper manifest arrives in Phase 6.
             params0: params.first().copied().unwrap_or(0.0),
             mouse: [state.mouse_x, state.mouse_y],
-            params,
+            // v1 slot: params 0..3 (4..16 ride in `params_ext`).
+            params: params[..4].try_into().expect("16 params"),
             res: [state.width as f32, state.height as f32],
             mouse_speed: speed,
             _pad44: 0.0,
@@ -2024,6 +2024,11 @@ impl FrameRenderer for AnimatedRenderer {
             _pad60: 0.0,
             mouse_prev,
             _pad_end: [0.0; 2],
+            params_ext: [
+                params[4..8].try_into().expect("16 params"),
+                params[8..12].try_into().expect("16 params"),
+                params[12..16].try_into().expect("16 params"),
+            ],
         };
         self.ctx
             .queue()

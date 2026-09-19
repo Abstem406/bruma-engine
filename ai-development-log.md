@@ -1402,3 +1402,16 @@ Hardened along the way:
   manifest default per position), so a hot package switch via SIGHUP
   can never inherit the previous package's uniforms (observed live:
   fog's speed/density running water-cursor's slots after a compose).
+
+## L1 — Layered engine (manifest layers → generated WGSL → N-layer compositor)
+- Runtime/renderer: param block extended to 16 (128-byte uniform buffer; legacy
+  byte offsets 0..80 untouched, old shaders keep working unmodified).
+- Manifest: params cap raised 4 → 16.
+- New `layers.rs`: layer model (base photo + N effect layers with opacity,
+  parallax depth and per-layer params), effect catalog (photo-base, fog, waves,
+  parallax-aurora, trail, stars) and a pure WGSL generator verified with naga.
+- Studio: `GET/PUT /api/layers` (persists `layers.json`, regenerates
+  `main.wgsl`, wakes daemons), `GET /api/catalog`; UI Design tab now has a
+  layer stack (add/remove/reorder) with per-layer sliders.
+- Verified live: 2-layer stack (photo + fog, + stars) compiled and running on
+  GPU on both outputs, per-layer params seeded (`fog_*`, `stars_*`).
