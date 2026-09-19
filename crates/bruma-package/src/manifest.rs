@@ -29,11 +29,13 @@ pub const SCHEMA_VERSION: u32 = 1;
 
 /// Fields the v1 schema requires (PLAN Phase 4).
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub struct Manifest {
     /// Schema version (1).
     pub format: u32,
     /// Wallpaper type: `shader` (implemented) or `video`/`web`
-    /// (reserved, D10).
+    /// (reserved, D10). Serialized as `type` (the schema's field name).
+    #[serde(rename = "type")]
     pub wallpaper_type: String,
     /// Human-readable title.
     pub title: String,
@@ -75,6 +77,7 @@ pub struct TextureSpec {
 
 /// Aspect mapping of a texture onto the output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TextureFit {
     /// Fill the screen, cropping the overflow (a wallpaper default).
     #[default]
@@ -603,6 +606,27 @@ mod tests {
             "textures": [{"path": "assets/x.jpg", "fit": "stretch"}],"#,
         );
         assert!(Manifest::parse(&json).is_err());
+    }
+
+    #[test]
+    fn serialize_round_trips_through_parse() {
+        // The studio writes manifests back with serde; whatever it
+        // writes must parse again with the real parser.
+        let m = Manifest::parse(&base_json()).unwrap();
+        let json = serde_json::to_string_pretty(&m).unwrap();
+        let m2 = Manifest::parse(&json).unwrap();
+        assert_eq!(m, m2);
+        // With textures, the fit serializes lowercase ("cover"), not
+        // the variant name ("Cover").
+        let json = base_json().replace(
+            r#""preview": "preview.png","#,
+            r#""preview": "preview.png",
+            "textures": [{"path": "assets/x.jpg", "fit": "contain"}],"#,
+        );
+        let m = Manifest::parse(&json).unwrap();
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains(r#""fit":"contain""#), "{json}");
+        assert!(Manifest::parse(&json).unwrap() == m);
     }
 
     #[test]

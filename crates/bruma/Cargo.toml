@@ -26,5 +26,11 @@ libc = "0.2"
 # the engine runs before writing (naga rides in the tree via wgpu —
 # no new code, D8).
 naga = { version = "30.0.1", features = ["wgsl-in"] }
+# `bruma studio` sniffs uploaded image bytes (texture slot + preview)
+# before writing them into the package — the `image` crate is already
+# in the tree via the renderer (D8).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+# Base64 decode of the studio's photo uploads (single-purpose, tiny).
+base64 = "0.22"
 
 [dev-dependencies]

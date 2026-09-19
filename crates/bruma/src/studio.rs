@@ -180,10 +180,196 @@ fn api_shader_put(name: &str, source: &[u8]) -> Result<String, (String, &'static
     Ok(r#"{"ok":true}"#.into())
 }
 
-fn api_manifest_get(name: &str) -> Result<String, (String, &'static str)> {
-    let (manifest, _) =
+fn api_activate(body: &[u8]) -> Result<String, String> {
+    let v: serde_json::Value = serde_json::from_slice(body).map_err(|_| "bad JSON".to_owned())?;
+    let name = v
+        .get("name")
+        .and_then(|n| n.as_str())
+        .ok_or("name required")?;
+    if !manifest_for(name).is_some() {
+        return Err(format!("'{name}' is not installed"));
+    }
+    crate::mime::apply_as_default(name);
+    Ok(format!(r#"{{"ok":true,"active":"{name}"}}"#))
+}
+
+fn api_uninstall(body: &[u8]) -> Result<String, String> {
+    let v: serde_json::Value = serde_json::from_slice(body).map_err(|_| "bad JSON".to_owned())?;
+    let name = v
+        .get("name")
+        .and_then(|n| n.as_str())
+        .ok_or("name required")?;
+    let version = v
+        .get("version")
+        .and_then(|n| n.as_str())
+        .ok_or("version required")?;
+    if manifest_for(name).is_none() {
+        return Err(format!("'{name}' is not installed"));
+    }
+    // The studio has no view of which package is active; the same rule
+    // as the gallery: removing the running one leaves the daemon with a
+    // dead path. Refuse; the creator activates another first.
+    let active = config::Config::load()
+        .ok()
+        .flatten()
+        .and_then(|c| c.default)
+        .and_then(|d| d.package)
+        .map(|p| p.split(':').next().unwrap_or(&p).to_owned());
+    if active.as_deref() == Some(name) {
+        return Err(format!(
+            "'{name}' is the active wallpaper — activate another first"
+        ));
+    }
+    match default_store().uninstall(name, version) {
+        Ok(true) => Ok(format!(r#"{{"ok":true,"uninstalled":"{name}"}}"#)),
+        Ok(false) => Err(format!("{name} {version} not found")),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn api_preview_get(name: &str) -> Result<Vec<u8>, (String, &'static str)> {
+    let (_, dir) =
         manifest_for(name).ok_or_else(|| (format!("'{name}' is not installed"), "404"))?;
-    serde_json::to_string(&manifest).map_err(|e| (e.to_string(), "500"))
+    std::fs::read(dir.join("preview.png")).map_err(|e| (format!("no preview: {e}"), "404"))
+}
+
+fn api_preview_put(name: &str, bytes: &[u8]) -> Result<String, (String, &'static str)> {
+    let (_, dir) =
+        manifest_for(name).ok_or_else(|| (format!("'{name}' is not installed"), "404"))?;
+    if image::guess_format(bytes).is_err() {
+        return Err(("preview must be a png/jpg image".into(), "400"));
+    }
+    std::fs::write(dir.join("preview.png"), bytes)
+        .map_err(|e| (format!("cannot write: {e}"), "500"))?;
+    println!("[studio] {name} — preview updated");
+    Ok(r#"{"ok":true}"#.into())
+}
+
+fn api_textures_get(name: &str) -> Result<String, (String, &'static str)> {
+    let (manifest, dir) =
+        manifest_for(name).ok_or_else(|| (format!("'{name}' is not installed"), "404"))?;
+    let items: Vec<String> = manifest
+        .textures
+        .iter()
+        .map(|t| {
+            let dims = image::image_dimensions(dir.join(&t.path))
+                .map(|(w, h)| format!(r#""w":{w},"h":{h},"#))
+                .unwrap_or_default();
+            format!(
+                r#"{{"path":"{}","fit":"{}",{}"url":"/api/texture?name={}&i={}"}}"#,
+                json_escape(&t.path),
+                match t.fit {
+                    bruma_package::TextureFit::Cover => "cover",
+                    bruma_package::TextureFit::Contain => "contain",
+                },
+                dims,
+                json_escape(name),
+                t.path.trim_start_matches("assets/")
+            )
+        })
+        .collect();
+    Ok(format!(r#"{{"textures":[{}]}}"#, items.join(",")))
+}
+
+/// Replaces (or adds) the texture at `slot` with the uploaded image.
+/// The manifest entry is created/updated with the requested fit and
+/// the file lands at `assets/photo<ext>` (ext sniffed from the bytes).
+fn api_texture_put(name: &str, fit: &str, bytes: &[u8]) -> Result<String, (String, &'static str)> {
+    let fit = match fit {
+        "cover" => bruma_package::TextureFit::Cover,
+        "contain" => bruma_package::TextureFit::Contain,
+        _ => return Err(("fit must be cover|contain".into(), "400")),
+    };
+    let (mut manifest, dir) =
+        manifest_for(name).ok_or_else(|| (format!("'{name}' is not installed"), "404"))?;
+    let format = image::guess_format(bytes)
+        .map_err(|_| ("upload must be a png/jpg image".to_owned(), "400"))?;
+    let ext = match format {
+        image::ImageFormat::Jpeg => "jpg",
+        _ => "png",
+    };
+    let rel = format!("assets/photo.{ext}");
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).map_err(|e| (format!("cannot create assets/: {e}"), "500"))?;
+    std::fs::write(dir.join(&rel), bytes).map_err(|e| (format!("cannot write: {e}"), "500"))?;
+    // Manifest update: slot 0 replaced (the engine's texture slots are
+    // fixed; the studio manages the first as "the photo").
+    manifest.textures.clear();
+    manifest.textures.push(bruma_package::TextureSpec {
+        path: rel.clone(),
+        fit,
+    });
+    write_manifest(&dir, &manifest)?;
+    // Permissions: a texture almost always rides with feedback+mouse
+    // (water) — add them so the re-installed engine arms the features.
+    for perm in ["feedback", "mouse"] {
+        if !manifest.permissions.iter().any(|p| p == perm) {
+            manifest.permissions.push(perm.to_owned());
+        }
+    }
+    write_manifest(&dir, &manifest)?;
+    println!("[studio] {name} — texture {rel} ({fit:?})");
+    Ok(format!(r#"{{"ok":true,"path":"{rel}"}}"#))
+}
+
+/// Writes the manifest back to the installed package (pretty, with the
+/// same field names the parser accepts).
+fn write_manifest(
+    dir: &std::path::Path,
+    manifest: &bruma_package::Manifest,
+) -> Result<(), (String, &'static str)> {
+    let json = serde_json::to_string_pretty(manifest).map_err(|e| (e.to_string(), "500"))? + "\n";
+    std::fs::write(dir.join("wallpaper.json"), json)
+        .map_err(|e| (format!("cannot write manifest: {e}"), "500"))
+}
+
+/// COMPOSE (the layers v1): a user photo + an effect template over it.
+/// Reuses the engine's own composable pair: `water-cursor` (water over
+/// the photo) or `water-photo`/`parallax`/etc. — the template's texture
+/// slot IS the layer under the effect. The chosen template's code
+/// becomes the package's shader and the photo lands in its slot.
+fn api_compose(body: &[u8]) -> Result<String, String> {
+    let v: serde_json::Value = serde_json::from_slice(body).map_err(|_| "bad JSON".to_owned())?;
+    let name = v
+        .get("name")
+        .and_then(|n| n.as_str())
+        .ok_or("name required")?;
+    let effect = v
+        .get("effect")
+        .and_then(|e| e.as_str())
+        .unwrap_or("water-cursor");
+    let fit = v.get("fit").and_then(|f| f.as_str()).unwrap_or("cover");
+    let photo = v
+        .get("photo_b64")
+        .and_then(|p| p.as_str())
+        .ok_or("photo_b64 required (the image, base64)")?;
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(photo)
+        .map_err(|_| "photo_b64 is not valid base64".to_owned())?;
+    // 1. The effect template's source becomes the package shader.
+    let source = crate::new::template_source(effect)
+        .ok_or_else(|| format!("unknown effect '{effect}'"))?
+        .to_owned();
+    api_shader_put(name, source.as_bytes()).map_err(|(e, _)| e)?;
+    // 2. The photo goes to the texture slot.
+    api_texture_put(name, fit, &bytes).map_err(|(e, _)| e)?;
+    // 3. The template's params replace the manifest's (its identity),
+    // preserving the package title/name.
+    let (mut manifest, dir) =
+        manifest_for(name).ok_or_else(|| format!("'{name}' is not installed"))?;
+    let fresh_json = crate::new::manifest_json(&manifest.title, effect)
+        .ok_or_else(|| format!("unknown effect '{effect}'"))?;
+    let mut fresh = bruma_package::Manifest::parse(&fresh_json)
+        .map_err(|e| format!("internal error: template manifest invalid: {e}"))?;
+    fresh.version = manifest.version.clone();
+    manifest.params = fresh.params;
+    write_manifest(&dir, &manifest).map_err(|(e, _)| e)?;
+    println!("[studio] {name} — composed: {effect} over a photo ({fit})");
+    Ok(format!(
+        r#"{{"ok":true,"name":"{}","effect":"{effect}"}}"#,
+        json_escape(name)
+    ))
 }
 
 /// Effective values = manifest defaults with the config's overrides on
@@ -221,6 +407,12 @@ fn api_params_get(name: &str) -> String {
         })
         .collect();
     format!(r#"{{"params":[{}]}}"#, rows.join(","))
+}
+
+fn api_manifest_get(name: &str) -> Result<String, (String, &'static str)> {
+    let (manifest, _) =
+        manifest_for(name).ok_or_else(|| (format!("'{name}' is not installed"), "404"))?;
+    serde_json::to_string(&manifest).map_err(|e| (e.to_string(), "500"))
 }
 
 fn api_params_set(body: &[u8]) -> Result<String, String> {
@@ -364,7 +556,115 @@ fn handle(stream: &mut TcpStream, method: &str, path: &str, query: &str, body: &
                 format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
             ),
         },
+        ("POST", "/api/activate") => match api_activate(body) {
+            Ok(j) => respond_json(stream, "200 OK", j),
+            Err(e) => respond_json(
+                stream,
+                "400 Bad Request",
+                format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
+            ),
+        },
+        ("POST", "/api/uninstall") => match api_uninstall(body) {
+            Ok(j) => respond_json(stream, "200 OK", j),
+            Err(e) => respond_json(
+                stream,
+                "400 Bad Request",
+                format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
+            ),
+        },
+        ("GET", "/api/preview") => match q("name") {
+            Some(n) => match api_preview_get(&n) {
+                Ok(png) => respond(stream, "200 OK", "image/png", &png),
+                Err((e, status)) => ok(stream, Err::<String, (String, &'static str)>((e, status))),
+            },
+            None => respond_json(
+                stream,
+                "400 Bad Request",
+                r#"{"error":"name required"}"#.into(),
+            ),
+        },
+        ("PUT", "/api/preview") => match q("name") {
+            Some(n) => match api_preview_put(&n, body) {
+                Ok(j) => respond_json(stream, "200 OK", j),
+                Err((e, status)) => ok(stream, Err::<String, (String, &'static str)>((e, status))),
+            },
+            None => respond_json(
+                stream,
+                "400 Bad Request",
+                r#"{"error":"name required"}"#.into(),
+            ),
+        },
+        ("GET", "/api/textures") => match q("name") {
+            Some(n) => match api_textures_get(&n) {
+                Ok(items) => respond_json(stream, "200 OK", items),
+                Err((e, status)) => ok(stream, Err::<String, (String, &'static str)>((e, status))),
+            },
+            None => respond_json(
+                stream,
+                "400 Bad Request",
+                r#"{"error":"name required"}"#.into(),
+            ),
+        },
+        ("PUT", "/api/textures") => match q("name") {
+            Some(n) => match q("fit") {
+                Some(fit) => match api_texture_put(&n, &fit, body) {
+                    Ok(j) => respond_json(stream, "200 OK", j),
+                    Err((e, status)) => {
+                        ok(stream, Err::<String, (String, &'static str)>((e, status)))
+                    }
+                },
+                None => respond_json(
+                    stream,
+                    "400 Bad Request",
+                    r#"{"error":"fit required (cover|contain)"}"#.into(),
+                ),
+            },
+            None => respond_json(
+                stream,
+                "400 Bad Request",
+                r#"{"error":"name required"}"#.into(),
+            ),
+        },
+        ("GET", "/api/texture") => match (q("name"), q("i")) {
+            (Some(n), Some(i)) => api_texture_file(&n, &i, stream),
+            _ => respond_json(
+                stream,
+                "400 Bad Request",
+                r#"{"error":"name and i required"}"#.into(),
+            ),
+        },
+        ("POST", "/api/compose") => match api_compose(body) {
+            Ok(j) => respond_json(stream, "200 OK", j),
+            Err(e) => respond_json(
+                stream,
+                "400 Bad Request",
+                format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
+            ),
+        },
         _ => respond_json(stream, "404 Not Found", r#"{"error":"no route"}"#.into()),
+    }
+}
+
+/// Serves one texture file of an installed package (the UI shows it
+/// as an <img>): /api/texture?name=N&i=photo.jpg (relative to assets/).
+fn api_texture_file(name: &str, rel: &str, stream: &mut TcpStream) {
+    let Some((_, dir)) = manifest_for(name) else {
+        respond_json(stream, "404 Not Found", r#"{"error":"not found"}"#.into());
+        return;
+    };
+    // No traversal: only the file name under assets/.
+    let file = std::path::Path::new(rel)
+        .file_name()
+        .map(|f| dir.join("assets").join(f));
+    match file.and_then(|p| std::fs::read(p).ok()) {
+        Some(bytes) => {
+            let ctype = match image::guess_format(&bytes) {
+                Ok(image::ImageFormat::Jpeg) => "image/jpeg",
+                _ => "image/png",
+            };
+            respond(stream, "200 OK", ctype, &bytes);
+        }
+        None => respond_json(stream, "404 Not Found", r#"{"error":"no texture"}"#.into()),
     }
 }
 
