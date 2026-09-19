@@ -348,14 +348,17 @@ fn api_compose(body: &[u8]) -> Result<String, String> {
         .decode(photo)
         .map_err(|_| "photo_b64 is not valid base64".to_owned())?;
     // 1. The effect template's source becomes the package shader.
-    let source = crate::new::template_source(effect)
-        .ok_or_else(|| format!("unknown effect '{effect}'"))?
-        .to_owned();
+    let source =
+        crate::new::template_source(effect).ok_or_else(|| format!("unknown effect '{effect}'"))?;
+    // Does the template actually sample a texture? (Only the photo
+    // families declare `textures`; parallax/fog/waves/trail are pure
+    // math.) Composing one of those over a photo is legal but the photo
+    // would be INVISIBLE — take it from the manifest and say so.
+    let uses_texture = source.contains("tex0");
     api_shader_put(name, source.as_bytes()).map_err(|(e, _)| e)?;
-    // 2. The photo goes to the texture slot.
-    api_texture_put(name, fit, &bytes).map_err(|(e, _)| e)?;
-    // 3. The template's params replace the manifest's (its identity),
-    // preserving the package title/name.
+    // 2. The template's identity replaces the manifest's params and
+    // permissions, preserving the package title/name. The photo goes to
+    // the texture slot ONLY for the photo families.
     let (mut manifest, dir) =
         manifest_for(name).ok_or_else(|| format!("'{name}' is not installed"))?;
     let fresh_json = crate::new::manifest_json(&manifest.title, effect)
@@ -363,11 +366,27 @@ fn api_compose(body: &[u8]) -> Result<String, String> {
     let mut fresh = bruma_package::Manifest::parse(&fresh_json)
         .map_err(|e| format!("internal error: template manifest invalid: {e}"))?;
     fresh.version = manifest.version.clone();
-    manifest.params = fresh.params;
-    write_manifest(&dir, &manifest).map_err(|(e, _)| e)?;
-    println!("[studio] {name} — composed: {effect} over a photo ({fit})");
+    if uses_texture {
+        // The photo goes to the texture slot (api_texture_put writes
+        // the manifest with the texture); re-read before applying the
+        // template identity so that edit is not lost.
+        api_texture_put(name, fit, &bytes).map_err(|(e, _)| e)?;
+        let (manifest, dir) =
+            manifest_for(name).ok_or_else(|| format!("'{name}' is not installed"))?;
+        let mut manifest = manifest;
+        manifest.params = fresh.params;
+        manifest.permissions = fresh.permissions;
+        write_manifest(&dir, &manifest).map_err(|(e, _)| e)?;
+    } else {
+        manifest.params = fresh.params;
+        manifest.permissions = fresh.permissions;
+        manifest.textures.clear();
+        write_manifest(&dir, &manifest).map_err(|(e, _)| e)?;
+        println!("[studio] {effect} ignores the photo (pure-math effect) — texture removed");
+    }
+    println!("[studio] {name} — composed: {effect}");
     Ok(format!(
-        r#"{{"ok":true,"name":"{}","effect":"{effect}"}}"#,
+        r#"{{"ok":true,"name":"{}","effect":"{effect}","uses_photo":{uses_texture}}}"#,
         json_escape(name)
     ))
 }
